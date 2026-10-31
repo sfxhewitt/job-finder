@@ -9,7 +9,10 @@
   const MIN_WAGE = 12.71; // UK National Living Wage (21+) from April 2026
   const LS = { marks: "jf.marks", criteria: "jf.criteria", prefs: "jf.prefs", token: "jf.token", gh: "jf.github" };
   const GH_DEFAULTS = { owner: "sfxhewitt", repo: "job-searcher", branch: "main", token: "" };
-  const GH_PATHS = { jobs: "web/data/jobs.json", marks: "web/data/marks.json", criteria: "search_criteria.json" };
+  const GH_PATHS = { jobs: "web/data/jobs.json", marks: "web/data/marks.json", criteria: "search_criteria.json", apply: "web/data/apply_requests.json" };
+  // "Apply for me" requests: [{ key, url, title, company, requested_at, updated_at, status, note? }]
+  // status: requested -> drafted -> applied (set by the apply workflow), or cancelled / failed.
+  const APPLY_LABEL = { requested: "Apply requested", drafted: "Application drafted", applied: "Applied for you", failed: "Couldn't apply", cancelled: "" };
   const DEFAULT_CRITERIA = {
     // Generic defaults: the real criteria come from search_criteria.json in the private repo.
     candidate: "", locations: [], remote_ok: true, hours: "any", school_hours: false,
@@ -22,6 +25,7 @@
     jobs: [],
     source: "",
     sample: false,
+    applyRequests: [],
     marks: {},               // key -> { state: "saved"|"applied"|"hidden"|undefined, seen: bool, note: string, updated: iso }
     criteria: { ...DEFAULT_CRITERIA },
     tab: "all",
@@ -120,6 +124,20 @@
   }
 
   // Newest edit per job wins when two devices save marks at the same time.
+  // Merge apply requests by job key; whichever side touched an entry last wins,
+  // so status updates from the apply workflow are never overwritten by an older copy.
+  function mergeApply(remote, local) {
+    const byKey = new Map();
+    for (const r of Array.isArray(remote) ? remote : []) if (r && r.key) byKey.set(r.key, r);
+    for (const l of Array.isArray(local) ? local : []) {
+      if (!l || !l.key) continue;
+      const r = byKey.get(l.key);
+      const t = (x) => String(x.updated_at || x.requested_at || "");
+      if (!r || t(l) > t(r)) byKey.set(l.key, l);
+    }
+    return [...byKey.values()];
+  }
+
   function mergeMarks(remote, local) {
     const out = { ...(remote || {}) };
     for (const [k, v] of Object.entries(local || {})) {
@@ -132,6 +150,7 @@
     const [jobs, marks, criteria] = await Promise.all([
       gh.read(GH_PATHS.jobs, null), gh.read(GH_PATHS.marks, {}), gh.read(GH_PATHS.criteria, {}),
     ]);
+    state.applyRequests = await gh.read(GH_PATHS.apply, []).catch(() => []);
     state.mode = "github";
     if (jobs) applyJobs({ jobs: toJobList(jobs), source: `${gh.cfg().repo}/${GH_PATHS.jobs}`, sample: false });
     else applyJobs({ jobs: [], source: "", sample: false });
@@ -154,6 +173,7 @@
       } else {
         try {
           const [jobs, marks, criteria] = await Promise.all([api("api/jobs"), api("api/marks"), api("api/criteria")]);
+          state.applyRequests = await api("api/apply").catch(() => []);
           state.mode = "server";
           applyJobs(jobs);
           state.marks = marks && typeof marks === "object" ? marks : {};
@@ -327,6 +347,7 @@
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
   const safeUrl = (u) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
   const mark = (k) => state.marks[k] || {};
+  const applyReq = (k) => (Array.isArray(state.applyRequests) ? state.applyRequests : []).find((r) => r.key === k && r.status !== "cancelled");
   const fmtDate = (d) => {
     if (!d) return "";
     const dt = new Date(d + "T00:00:00");
@@ -349,7 +370,7 @@
     const q = state.query.trim().toLowerCase();
     let list = state.jobs.filter((j) => j.status !== "expired" || q);
     if (state.tab === "saved") list = list.filter((j) => mark(j.key).state === "saved");
-    else if (state.tab === "applied") list = list.filter((j) => mark(j.key).state === "applied");
+    else if (state.tab === "applied") list = list.filter((j) => mark(j.key).state === "applied" || applyReq(j.key));
     else {
       if (!state.showHidden) list = list.filter((j) => mark(j.key).state !== "hidden");
       const f = state.filters;
@@ -392,6 +413,8 @@
 
   function tags(j) {
     const t = [];
+    const ar = applyReq(j.key);
+    if (ar && APPLY_LABEL[ar.status]) t.push(`<span class="tag ${ar.status === "failed" ? "warn" : "good"}">${esc(APPLY_LABEL[ar.status])}</span>`);
     if (j.location) t.push(`<span class="tag">${ICON.pin}${esc(j.location)}</span>`);
     const pay = payText(j);
     if (pay) t.push(`<span class="tag${j._hourly != null && j._hourly > MIN_WAGE + 0.25 ? " good" : ""}">${esc(pay)}</span>`);
@@ -481,12 +504,67 @@
       ${list(j.gaps) ? `<h3>Watch out for</h3>${list(j.gaps)}` : ""}
       ${j.language_note ? `<h3>Language</h3><p>${esc(j.language_note)}</p>` : ""}
       ${url ? `<a class="primary" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${ICON.ext} Open job advert</a>` : ""}
+      <div id="apply-box">${applyBox(j)}</div>
       <div class="sheet-actions card-actions" style="border:0">${actionButtons(j)}</div>
       <h3>Notes</h3>
       <textarea class="notes" data-note="${esc(j.key)}" placeholder="E.g. called the shop, interview Tuesday 10am">${esc(mark(key).note || "")}</textarea>`;
     const dlg = $("#detail");
     if (!dlg.open) dlg.showModal();
     $("#detail .sheet-inner").scrollTop = 0;
+    render();
+  }
+
+  function applyBox(j) {
+    const r = applyReq(j.key);
+    if (state.mode === "static") return "";
+    if (!r) return `<button type="button" class="secondary" data-apply="${esc(j.key)}">I like this job, apply for me</button>`;
+    const msg = {
+      requested: "Application requested. It'll be drafted on the next run, and you'll see it change here.",
+      drafted: "Application drafted. Check it before it's sent.",
+      applied: "Applied for you.",
+      failed: "Couldn't apply automatically" + (r.note ? `: ${r.note}` : "."),
+    }[r.status] || `Status: ${r.status}`;
+    return `<p class="apply-status ${r.status === "failed" ? "is-warn" : ""}">${esc(msg)}</p>`
+      + (r.status === "requested" ? `<button type="button" class="link-btn" data-apply-cancel="${esc(j.key)}">Cancel request</button>` : "");
+  }
+
+  let applySaving = Promise.resolve();
+  function saveApply() {
+    const data = state.applyRequests;
+    const run = async () => {
+      if (state.mode === "github") await gh.write(GH_PATHS.apply, data, "Apply-for-me request from Job Finder", mergeApply);
+      else await api("api/apply", { method: "PUT", body: JSON.stringify(data) });
+    };
+    applySaving = applySaving.then(run, run);
+    return applySaving;
+  }
+
+  async function requestApply(key) {
+    const j = state.jobs.find((x) => x.key === key);
+    if (!j) return;
+    if (!confirm(`Ask for an application to ${j.title}${j.company ? ` at ${j.company}` : ""}?`)) return;
+    const now = new Date().toISOString();
+    const entry = { key, url: j.url || "", title: j.title, company: j.company || "", requested_at: now, updated_at: now, status: "requested" };
+    state.applyRequests = mergeApply(state.applyRequests, [entry]);
+    refreshApplyBox(key);
+    try { await saveApply(); toast("Application requested"); }
+    catch { state.applyRequests = state.applyRequests.filter((r) => r !== entry); refreshApplyBox(key); toast("Couldn't send the request. Try again."); }
+  }
+
+  async function cancelApply(key) {
+    const r = applyReq(key);
+    if (!r || r.status !== "requested") return;
+    const cancelled = { ...r, status: "cancelled", updated_at: new Date().toISOString() };
+    state.applyRequests = mergeApply(state.applyRequests, [cancelled]);
+    refreshApplyBox(key);
+    try { await saveApply(); toast("Request cancelled"); }
+    catch { toast("Couldn't cancel. Try again."); }
+  }
+
+  function refreshApplyBox(key) {
+    const box = $("#apply-box");
+    const j = state.jobs.find((x) => x.key === key);
+    if (box && j) box.innerHTML = applyBox(j);
     render();
   }
 
@@ -616,6 +694,10 @@
   })();
 
   document.addEventListener("click", (e) => {
+    const ap = e.target.closest("[data-apply]");
+    if (ap) { requestApply(ap.dataset.apply); return; }
+    const apc = e.target.closest("[data-apply-cancel]");
+    if (apc) { cancelApply(apc.dataset.applyCancel); return; }
     const act = e.target.closest("[data-act]");
     if (act) { toggleState(act.dataset.key, act.dataset.act); return; }
     const open = e.target.closest("[data-open]");
@@ -663,7 +745,7 @@
   }
 
   // Exposed for tests.
-  window.__jf = { parsePay, schoolHours, parseTimeRanges, state, mergeMarks };
+  window.__jf = { parsePay, schoolHours, parseTimeRanges, state, mergeMarks, mergeApply };
 
   loadAll();
 })();

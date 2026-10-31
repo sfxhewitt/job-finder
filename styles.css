@@ -241,3 +241,12 @@ details.help summary { cursor: pointer; color: var(--accent); font-weight: 600; 
 details.help ol { padding-left: 20px; margin: 6px 0 0; }
 details.help li { margin: 4px 0; }
 details.help a { color: var(--accent); }
+
+.secondary {
+  display: flex; align-items: center; justify-content: center; width: 100%; height: 50px; margin-top: 10px;
+  border: 2px solid var(--accent); border-radius: 12px; background: transparent; color: var(--accent);
+  font-weight: 650; cursor: pointer;
+}
+.secondary:active { background: var(--accent-soft); }
+.apply-status { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); color: var(--text); font-size: .92rem; }
+.apply-status.is-warn { background: var(--low-soft); }
