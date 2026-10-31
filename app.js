@@ -343,7 +343,8 @@
     return true;
   }
 
-  // ---------- rendering ----------
+
+  // ---------- formatting helpers ----------
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
   const safeUrl = (u) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
   const mark = (k) => state.marks[k] || {};
@@ -351,21 +352,49 @@
   const fmtDate = (d) => {
     if (!d) return "";
     const dt = new Date(d + "T00:00:00");
-    if (isNaN(dt)) return esc(d);
+    if (isNaN(dt)) return String(d);
     return dt.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
   };
   const daysUntil = (d) => { if (!d) return null; const t = new Date(d + "T23:59:59"); return isNaN(t) ? null : Math.ceil((t - Date.now()) / 864e5); };
+  const ago = (d) => {
+    if (!d) return "";
+    const t = new Date(d + "T12:00:00"); if (isNaN(t)) return "";
+    const days = Math.round((Date.now() - t) / 864e5);
+    if (days <= 0) return "Today"; if (days === 1) return "Yesterday";
+    if (days < 7) return `${days} days ago`; if (days < 14) return "1 week ago";
+    if (days < 60) return `${Math.floor(days / 7)} weeks ago`;
+    return fmtDate(d);
+  };
   const fitClass = (j) => {
     if (typeof j.rank_score === "number") return j.rank_score >= 70 ? "fit-high" : j.rank_score >= 50 ? "fit-medium" : "fit-low";
     return { high: "fit-high", medium: "fit-medium", low: "fit-low" }[(j.fit || "").toLowerCase()] || "fit-none";
   };
-  const fitLabel = (j) => (typeof j.rank_score === "number" ? String(Math.round(j.rank_score)) : (j.fit ? j.fit[0].toUpperCase() + j.fit.slice(1) : "–"));
-  const payText = (j) => {
-    if (!j._pay || j._pay.unstated) return "";
-    if (j._pay.hourly != null && /hour|minimum|living/i.test(j._pay.label)) return j._pay.label.length > 28 ? `£${j._pay.hourly.toFixed(2)}/hr` : j._pay.label;
-    return j._pay.label.length > 28 ? j._pay.label.slice(0, 26) + "…" : j._pay.label;
+  const fitText = (j) => {
+    if (typeof j.rank_score === "number") return `${Math.round(j.rank_score)}% match`;
+    return { "fit-high": "Great match", "fit-medium": "Good match", "fit-low": "Weak match" }[fitClass(j)] || "";
   };
+  // Pay shown big on the card: "£13.28" + "/hr", or the original text when it can't be parsed.
+  function payParts(j) {
+    const p = j._pay;
+    if (!p || p.unstated) return null;
+    if (p.label === "Minimum wage") return { big: `£${MIN_WAGE.toFixed(2)}`, unit: "/hr" };
+    if (p.hourly != null && /hour|\bph\b|p\/h|\bhr\b/i.test(p.label)) {
+      const from = /^\s*from\b/i.test(p.label) ? "From " : "";
+      const est = /estimat/i.test(p.label) ? " est." : "";
+      return { big: `${from}£${p.hourly.toFixed(2)}`, unit: `/hr${est}` };
+    }
+    const short = p.label.replace(/\s*\(.*?\)\s*/g, " ").trim();
+    return { big: short.length > 26 ? short.slice(0, 24) + "…" : short, unit: "" };
+  }
+  const AV_COLOURS = ["#4B3BF5", "#FF5A36", "#0E9F6E", "#D6336C", "#1C7ED6", "#E67700", "#7048E8", "#0B7285", "#C2255C", "#2F9E44"];
+  function avatar(j, cls = "") {
+    const name = (j.company || j.title || "?").replace(/^(the|example)\s+/i, "");
+    const initials = name.split(/[\s&()-]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "?";
+    let h = 0; for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return `<span class="avatar ${cls}" style="--av:${AV_COLOURS[h % AV_COLOURS.length]}" aria-hidden="true">${esc(initials)}</span>`;
+  }
 
+  // ---------- list ----------
   function visibleJobs() {
     const q = state.query.trim().toLowerCase();
     let list = state.jobs.filter((j) => j.status !== "expired" || q);
@@ -380,6 +409,7 @@
       if (f.has("remote")) list = list.filter((j) => j._remote);
       if (f.has("high")) list = list.filter((j) => fitClass(j) === "fit-high");
       if (f.has("new")) list = list.filter((j) => !mark(j.key).seen);
+      if (f.has("paid")) list = list.filter((j) => j._pay && !j._pay.unstated);
     }
     if (q) list = list.filter((j) => q.split(/\s+/).every((w) => j._haystack.includes(w)));
 
@@ -395,38 +425,87 @@
     return list.sort(sorters[state.sort] || sorters.score);
   }
 
+  const I = (d, extra = "") => `<svg viewBox="0 0 24 24" aria-hidden="true"${extra}>${d}</svg>`;
   const ICON = {
-    star: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>',
-    check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l5 5L20 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    hide: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 6.1A9.9 9.9 0 0 1 12 6c5 0 9 6 9 6a17 17 0 0 1-2.8 3.3M6.6 6.6C4.3 8.1 3 12 3 12s4 6 9 6a8.7 8.7 0 0 0 4.4-1.2M9.9 9.9a3 3 0 0 0 4.2 4.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
-    pin: '<svg viewBox="0 0 24 24" aria-hidden="true" style="width:14px;height:14px"><path d="M12 21s7-6.1 7-11.5A7 7 0 0 0 5 9.5C5 14.9 12 21 12 21z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="9.5" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
-    ext: '<svg viewBox="0 0 24 24" aria-hidden="true" style="width:18px;height:18px"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+    bookmark: I('<path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4.5L5 21V4.5a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>'),
+    x: I('<path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>'),
+    send: I('<path d="M22 3 11 14M22 3l-7 18-4-7-7-4z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>'),
+    check: I('<path d="M5 12l5 5L20 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>'),
+    pin: I('<path d="M12 21s7-6.1 7-11.5A7 7 0 0 0 5 9.5C5 14.9 12 21 12 21z" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="12" cy="9.5" r="2.4" fill="none" stroke="currentColor" stroke-width="2.2"/>'),
+    clock: I('<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>'),
+    sun: I('<circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>'),
+    cal: I('<rect x="4" y="5" width="16" height="15" rx="3" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M4 10h16M9 3v4M15 3v4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>'),
+    home: I('<path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>'),
+    ext: I('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>'),
+    search: I('<circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>'),
+    spark: I('<path d="M12 3l2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>'),
+    key: I('<circle cx="8" cy="15" r="4" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m11 12 9-9M17 6l3 3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>'),
   };
 
-  function actionButtons(j) {
-    const s = mark(j.key).state;
-    return `
-      <button class="act" data-act="saved" data-key="${esc(j.key)}" aria-pressed="${s === "saved"}">${ICON.star}<span>${s === "saved" ? "Saved" : "Save"}</span></button>
-      <button class="act" data-act="applied" data-key="${esc(j.key)}" aria-pressed="${s === "applied"}">${ICON.check}<span>${s === "applied" ? "Applied" : "Applied?"}</span></button>
-      <button class="act" data-act="hidden" data-key="${esc(j.key)}" aria-pressed="${s === "hidden"}">${ICON.hide}<span>${s === "hidden" ? "Hidden" : "Not for me"}</span></button>`;
-  }
-
-  function tags(j) {
+  function chips(j, { full = false } = {}) {
     const t = [];
     const ar = applyReq(j.key);
-    if (ar && APPLY_LABEL[ar.status]) t.push(`<span class="tag ${ar.status === "failed" ? "warn" : "good"}">${esc(APPLY_LABEL[ar.status])}</span>`);
-    if (j.location) t.push(`<span class="tag">${ICON.pin}${esc(j.location)}</span>`);
-    const pay = payText(j);
-    if (pay) t.push(`<span class="tag${j._hourly != null && j._hourly > MIN_WAGE + 0.25 ? " good" : ""}">${esc(pay)}</span>`);
-    if (j._school) t.push('<span class="tag good">School hours</span>');
-    else if (j.hours) t.push(`<span class="tag">${esc(j.hours.length > 30 ? j.hours.slice(0, 28) + "…" : j.hours)}</span>`);
-    if (j._remote && !/remote/i.test(j.location || "")) t.push('<span class="tag">Remote</span>');
+    if (ar && APPLY_LABEL[ar.status] && !full) t.push(`<span class="chip ${ar.status === "failed" ? "bad" : "brand"}">${ICON.send}${esc(APPLY_LABEL[ar.status])}</span>`);
+    if (j.location && !full) t.push(`<span class="chip">${ICON.pin}${esc(j.location)}</span>`);
+    if (j._school) t.push(`<span class="chip hl">${ICON.sun}School hours</span>`);
+    else if (j.hours && !full) {
+      const h = j.hours.split(/[;,]/)[0].trim();
+      t.push(`<span class="chip">${ICON.clock}${esc(h.length > 26 ? h.slice(0, 24) + "…" : h)}</span>`);
+    }
+    if (j._remote && !/remote/i.test(j.location || "")) t.push(`<span class="chip">${ICON.home}Remote</span>`);
     const d = daysUntil(j.deadline);
-    if (d != null) t.push(`<span class="tag${d <= 3 ? " warn" : ""}">${d < 0 ? "Closed" : d === 0 ? "Closes today" : `Closes ${fmtDate(j.deadline)}`}</span>`);
+    if (d != null) t.push(`<span class="chip${d <= 3 ? " warn" : ""}">${ICON.cal}${d < 0 ? "Closed" : d === 0 ? "Closes today" : d <= 7 ? `${d} day${d === 1 ? "" : "s"} left` : `Closes ${esc(fmtDate(j.deadline))}`}</span>`);
     const ex = excludedTerm(j);
-    if (ex) t.push(`<span class="tag warn">Mentions “${esc(ex)}”</span>`);
-    if (j.status === "expired") t.push('<span class="tag warn">Expired</span>');
+    if (ex) t.push(`<span class="chip bad">Mentions “${esc(ex)}”</span>`);
+    if (j.status === "expired") t.push('<span class="chip bad">Expired</span>');
     return t.join("");
+  }
+
+  function payHtml(j) {
+    const p = payParts(j);
+    if (!p) return '<span class="pay none">Pay not stated</span>';
+    const good = j._hourly != null && j._hourly > MIN_WAGE + 0.25;
+    return `<span class="pay${good ? " good" : ""}">${esc(p.big)}${p.unit ? `<small>${esc(p.unit)}</small>` : ""}</span>`;
+  }
+
+  function cardHtml(j, i) {
+    const m = mark(j.key);
+    const ar = applyReq(j.key);
+    const saved = m.state === "saved";
+    const foot = [ago(j.posted_date || j.first_seen), j.portal && j.portal !== "websearch" ? j.portal.replace(/-search$/, "") : ""].filter(Boolean).join(" · ");
+    let applyBtn;
+    if (ar) applyBtn = `<button class="icon-pill status${ar.status === "failed" ? " failed" : ""}" data-open="${esc(j.key)}">${ar.status === "failed" ? ICON.x : ICON.check}${esc({ requested: "Requested", drafted: "Drafted", applied: "Applied", failed: "Failed" }[ar.status] || ar.status)}</button>`;
+    else if (state.mode !== "static") applyBtn = `<button class="icon-pill apply" data-apply="${esc(j.key)}">${ICON.send}Apply</button>`;
+    else applyBtn = "";
+    return `<li class="swipe" data-key="${esc(j.key)}" style="--i:${Math.min(i, 12)}">
+      <div class="swipe-bg" aria-hidden="true"><span class="l">${ICON.bookmark}Save</span><span class="r">Not for me${ICON.x}</span></div>
+      <article class="card${m.state === "hidden" ? " is-hidden" : ""}">
+        <button class="save-fab" data-act="saved" data-key="${esc(j.key)}" aria-pressed="${saved}" aria-label="${saved ? "Saved" : "Save"}">${ICON.bookmark}</button>
+        <button class="card-tap" data-open="${esc(j.key)}">
+          <div class="card-top">
+            ${avatar(j)}
+            <div class="card-titles">
+              <p class="card-title">${!m.seen ? '<span class="new-dot" title="New"></span>' : ""}${esc(j.title)}</p>
+              <div class="card-company">${esc(j.company || "")}</div>
+            </div>
+          </div>
+          <div class="pay-line">${payHtml(j)}<span class="match ${fitClass(j)}">${esc(fitText(j))}</span></div>
+          <div class="chips">${chips(j)}</div>
+        </button>
+        <div class="card-foot">
+          <span class="foot-meta">${esc(foot)}</span>
+          <button class="icon-pill" data-act="hidden" data-key="${esc(j.key)}" aria-label="${m.state === "hidden" ? "Show again" : "Not for me"}">${m.state === "hidden" ? "Undo" : ICON.x}</button>
+          ${applyBtn}
+        </div>
+      </article>
+    </li>`;
+  }
+
+  const EMPTY_ICON = {
+    jobs: ICON.search, saved: ICON.bookmark, applied: ICON.send, key: ICON.key,
+  };
+  function emptyHtml(icon, title, body, btn = "") {
+    return `<div class="em-icon">${EMPTY_ICON[icon]}</div><strong>${title}</strong>${body}${btn}`;
   }
 
   function render() {
@@ -434,100 +513,212 @@
     $("#view-jobs").hidden = !listView;
     $("#view-criteria").hidden = listView;
     $("#list-controls").hidden = !listView;
-    $("#filter-chips").hidden = state.tab !== "all";
-    $("#screen-title").textContent = { all: "Jobs", saved: "Saved", applied: "Applied", criteria: "Search criteria" }[state.tab];
+    $("#scope").hidden = state.tab !== "all";
+    $("#hero").classList.toggle("compact", state.tab !== "all");
+    const name = (state.criteria.candidate || "").trim().split(/\s+/)[0];
+    const hr = new Date().getHours();
+    $("#greeting").textContent = `${hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening"}${name ? `, ${name}` : ""}`;
+    $("#screen-title").textContent = { all: "Jobs for you", saved: "Saved jobs", applied: "Applications", criteria: "Settings" }[state.tab];
     $$(".tab").forEach((b) => (b.dataset.tab === state.tab ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
-    $$(".chip").forEach((c) => c.setAttribute("aria-pressed", state.filters.has(c.dataset.filter)));
-    const local = $('[data-filter="local"]');
-    if (local) local.textContent = (state.criteria.locations && state.criteria.locations[0]) || "Local";
+
+    const scopeVal = state.filters.has("match") ? "match" : "all";
+    $("#scope").dataset.value = scopeVal;
+    $$("#scope button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.scope === scopeVal)));
+    const extra = [...state.filters].filter((f) => f !== "match").length + (state.sort !== "score" ? 1 : 0);
+    const fc = $("#filter-count"); fc.hidden = !extra; fc.textContent = extra;
+    $$("#filter-toggles .toggle").forEach((t) => t.setAttribute("aria-pressed", String(state.filters.has(t.dataset.filter))));
+    $("#local-label").textContent = (state.criteria.locations && state.criteria.locations[0]) || "Nearby";
+    $$('#sort-pills input').forEach((r) => (r.checked = r.value === state.sort));
 
     const savedN = state.jobs.filter((j) => mark(j.key).state === "saved").length;
-    const badge = $("#saved-count");
-    badge.hidden = !savedN; badge.textContent = savedN;
+    const badge = $("#saved-count"); badge.hidden = !savedN; badge.textContent = savedN;
 
     if (!listView) return;
+    if (state.loading && !state.jobs.length) {
+      $("#result-count").textContent = "Loading…"; $("#sort-label").textContent = "";
+      $("#job-list").innerHTML = '<li class="skeleton"></li><li class="skeleton"></li><li class="skeleton"></li>';
+      $("#empty").hidden = true;
+      return;
+    }
     const list = visibleJobs();
     $("#result-count").textContent = `${list.length} job${list.length === 1 ? "" : "s"}`;
-    $("#job-list").innerHTML = list.map((j) => {
-      const m = mark(j.key);
-      return `<li class="card${m.state === "hidden" ? " is-hidden" : ""}">
-        <button class="card-main" data-open="${esc(j.key)}">
-          <div class="card-head">
-            ${!m.seen ? '<span class="dot-new" title="Not opened yet"></span>' : ""}
-            <div style="flex:1;min-width:0">
-              <p class="card-title">${esc(j.title)}</p>
-              <div class="card-company">${esc(j.company || "")}</div>
-            </div>
-            <span class="score ${fitClass(j)}" title="Match">${esc(fitLabel(j))}</span>
-          </div>
-          <div class="meta">${tags(j)}</div>
-        </button>
-        <div class="card-actions">${actionButtons(j)}</div>
-      </li>`;
-    }).join("");
+    $("#sort-label").textContent = { score: "Best match first", newest: "Newest first", deadline: "Closing soon first", pay: "Highest pay first" }[state.sort];
+    $("#job-list").innerHTML = list.map(cardHtml).join("");
 
     const empty = $("#empty");
     empty.hidden = list.length > 0;
     if (!list.length) {
       const hiddenN = state.jobs.filter((j) => mark(j.key).state === "hidden").length;
-      if (!state.jobs.length && state.mode === "static") empty.innerHTML = '<strong>Connect to see jobs</strong>Add your GitHub access key under <button class="link-btn" data-goto-criteria>Criteria</button>.';
-      else if (!state.jobs.length) empty.innerHTML = "<strong>No jobs yet</strong>They'll appear here after the next search.";
-      else if (state.tab === "saved") empty.innerHTML = "<strong>Nothing saved yet</strong>Tap Save on a job to keep it here.";
-      else if (state.tab === "applied") empty.innerHTML = "<strong>No applications yet</strong>Tap Applied? on a job once you've applied.";
-      else empty.innerHTML = `<strong>No jobs match</strong>Try turning off a filter.${state.filters.size ? '<br><button class="link-btn" data-clear-filters>Clear filters</button>' : ""}${hiddenN && !state.showHidden ? `<br><button class="link-btn" data-show-hidden>Show ${hiddenN} hidden</button>` : ""}`;
+      if (!state.jobs.length && state.mode === "static") empty.innerHTML = emptyHtml("key", "Connect your job list", "Add your access key in Settings to see the real jobs.", '<br><button class="btn btn-primary" data-goto-criteria>Open settings</button>');
+      else if (!state.jobs.length) empty.innerHTML = emptyHtml("jobs", "No jobs yet", "They'll appear here after the next search.");
+      else if (state.tab === "saved") empty.innerHTML = emptyHtml("saved", "Nothing saved yet", "Tap the bookmark on a job, or swipe it right, to keep it here.");
+      else if (state.tab === "applied") empty.innerHTML = emptyHtml("applied", "No applications yet", "Tap Apply on a job you like and it'll show up here.");
+      else empty.innerHTML = emptyHtml("jobs", "No jobs match", "Try fewer filters, or look at all jobs.",
+        `<br><button class="btn btn-soft" data-clear-filters>Show all jobs</button>${hiddenN && !state.showHidden ? `<br><button class="link" data-show-hidden>Show ${hiddenN} you hid</button>` : ""}`);
     }
   }
 
+  // ---------- swipe gestures ----------
+  // Swipe right to save, left for "not for me". Vertical scrolling stays native (touch-action: pan-y).
+  (() => {
+    let s = null;
+    const list = $("#job-list");
+    list.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const li = e.target.closest(".swipe"); if (!li) return;
+      s = { li, card: $(".card", li), x0: e.clientX, y0: e.clientY, dx: 0, active: false, id: e.pointerId };
+    });
+    list.addEventListener("pointermove", (e) => {
+      if (!s || e.pointerId !== s.id) return;
+      const dx = e.clientX - s.x0, dy = e.clientY - s.y0;
+      if (!s.active) {
+        if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { s = null; return; }
+        if (Math.abs(dx) < 12) return;
+        s.active = true; s.card.classList.add("dragging");
+        try { s.card.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      }
+      s.dx = dx;
+      s.card.style.transform = `translateX(${dx}px) rotate(${dx / 60}deg)`;
+      s.li.dataset.dir = dx > 0 ? "right" : "left";
+    });
+    const end = () => {
+      if (!s) return;
+      const { li, card, dx, active } = s; s = null;
+      if (!active) return;
+      card.classList.remove("dragging");
+      const key = li.dataset.key;
+      const w = li.offsetWidth;
+      if (Math.abs(dx) > Math.min(110, w * 0.3)) {
+        suppressClick = true; setTimeout(() => (suppressClick = false), 50);
+        if (navigator.vibrate) navigator.vibrate(10);
+        if (dx > 0) {
+          card.style.transform = "";
+          delete li.dataset.dir;
+          if (mark(key).state !== "saved") toggleState(key, "saved");
+          else toast("Already saved");
+        } else {
+          card.style.transform = `translateX(${-w * 1.2}px) rotate(-8deg)`;
+          li.style.setProperty("--leave-x", "-110%");
+          setTimeout(() => toggleState(key, "hidden"), 180);
+        }
+      } else {
+        card.style.transform = "";
+        setTimeout(() => delete li.dataset.dir, 250);
+        if (Math.abs(dx) > 12) { suppressClick = true; setTimeout(() => (suppressClick = false), 50); }
+      }
+    };
+    list.addEventListener("pointerup", end);
+    list.addEventListener("pointercancel", () => { if (s) { s.card.style.transform = ""; s.card.classList.remove("dragging"); delete s.li.dataset.dir; s = null; } });
+  })();
+  let suppressClick = false;
+
+  // ---------- sheets ----------
+  function openSheet(dlg) { dlg.classList.remove("closing"); if (!dlg.open) dlg.showModal(); }
+  function closeSheet(dlg) {
+    if (!dlg.open || dlg.classList.contains("closing")) return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) { dlg.close(); return; }
+    dlg.classList.add("closing");
+    setTimeout(() => { dlg.classList.remove("closing"); dlg.close(); }, 220);
+  }
+  for (const dlg of $$("dialog.sheet")) {
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) closeSheet(dlg); });
+    dlg.addEventListener("cancel", (e) => { e.preventDefault(); closeSheet(dlg); });
+    let y0 = null;
+    const scroller = $(".sheet-scroll", dlg);
+    dlg.addEventListener("touchstart", (e) => { y0 = scroller.scrollTop <= 0 ? e.touches[0].clientY : null; }, { passive: true });
+    dlg.addEventListener("touchmove", (e) => {
+      if (y0 == null) return;
+      const dy = e.touches[0].clientY - y0;
+      if (dy > 0) { dlg.style.transform = `translateY(${dy}px)`; dlg.style.transition = "none"; }
+    }, { passive: true });
+    dlg.addEventListener("touchend", (e) => {
+      if (y0 == null) return;
+      const dy = e.changedTouches[0].clientY - y0; y0 = null;
+      dlg.style.transition = "transform .25s cubic-bezier(.2,.8,.2,1)";
+      if (dy > 110) { dlg.style.transform = "translateY(100%)"; setTimeout(() => { dlg.close(); dlg.style.transform = ""; dlg.style.transition = ""; }, 220); }
+      else { dlg.style.transform = ""; }
+    });
+  }
+
+  // ---------- job detail ----------
   function openDetail(key) {
     const j = state.jobs.find((x) => x.key === key);
     if (!j) return;
+    state.openKey = key;
     setMark(key, { seen: true }, false);
-    const url = safeUrl(j.url);
-    const list = (arr) => (Array.isArray(arr) && arr.length ? `<ul>${arr.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "");
-    const facts = [
-      ["Where", j.location],
-      ["Pay", j._pay && j._pay.label],
-      ["Hours", j.hours],
-      ["Posted", j.posted_date && fmtDate(j.posted_date)],
-      ["Closes", j.deadline ? fmtDate(j.deadline) : null],
-      ["Found", j.first_seen && fmtDate(j.first_seen)],
-      ["Fit", j.rank_verdict || j.fit],
-      ["Source", j.portal],
-    ].filter(([, v]) => v);
-    $("#detail-body").innerHTML = `
-      <h2 id="detail-title">${esc(j.title)}</h2>
-      <div class="card-company">${esc(j.company || "")}</div>
-      <div class="meta">${j._school ? '<span class="tag good">School hours</span>' : ""}${j._remote ? '<span class="tag">Remote</span>' : ""}<span class="tag score ${fitClass(j)}" style="height:auto">${typeof j.rank_score === "number" ? `Match ${Math.round(j.rank_score)}/100` : `Fit: ${esc(j.fit || "not rated")}`}</span></div>
-      <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
-      ${j.description ? `<h3>About the job</h3><p>${esc(j.description)}</p>` : ""}
-      ${list(j.strengths) ? `<h3>Why it fits</h3>${list(j.strengths)}` : ""}
-      ${list(j.gaps) ? `<h3>Watch out for</h3>${list(j.gaps)}` : ""}
-      ${j.language_note ? `<h3>Language</h3><p>${esc(j.language_note)}</p>` : ""}
-      ${url ? `<a class="primary" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${ICON.ext} Open job advert</a>` : ""}
-      <div id="apply-box">${applyBox(j)}</div>
-      <div class="sheet-actions card-actions" style="border:0">${actionButtons(j)}</div>
-      <h3>Notes</h3>
-      <textarea class="notes" data-note="${esc(j.key)}" placeholder="E.g. called the shop, interview Tuesday 10am">${esc(mark(key).note || "")}</textarea>`;
+    renderDetail(j);
     const dlg = $("#detail");
-    if (!dlg.open) dlg.showModal();
-    $("#detail .sheet-inner").scrollTop = 0;
+    openSheet(dlg);
+    $("#detail .sheet-scroll").scrollTop = 0;
     render();
   }
 
-  function applyBox(j) {
-    const r = applyReq(j.key);
-    if (state.mode === "static") return "";
-    if (!r) return `<button type="button" class="secondary" data-apply="${esc(j.key)}">I like this job, apply for me</button>`;
-    const msg = {
-      requested: "Application requested. It'll be drafted on the next run, and you'll see it change here.",
-      drafted: "Application drafted. Check it before it's sent.",
-      applied: "Applied for you.",
-      failed: "Couldn't apply automatically" + (r.note ? `: ${r.note}` : "."),
-    }[r.status] || `Status: ${r.status}`;
-    return `<p class="apply-status ${r.status === "failed" ? "is-warn" : ""}">${esc(msg)}</p>`
-      + (r.status === "requested" ? `<button type="button" class="link-btn" data-apply-cancel="${esc(j.key)}">Cancel request</button>` : "");
+  function renderDetail(j) {
+    const url = safeUrl(j.url);
+    const m = mark(j.key);
+    const bl = (arr, cls = "") => (Array.isArray(arr) && arr.length ? `<ul class="bullets ${cls}">${arr.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "");
+    const p = payParts(j);
+    const stats = [
+      p ? `<div class="stat pay-stat"><dt>Pay</dt><dd>${esc(p.big)}${esc(p.unit)}</dd></div>` : `<div class="stat"><dt>Pay</dt><dd>Not stated</dd></div>`,
+      `<div class="stat"><dt>Match</dt><dd>${esc(fitText(j) || j.rank_verdict || "Not rated")}</dd></div>`,
+      j.hours ? `<div class="stat wide"><dt>Hours</dt><dd>${esc(j.hours)}</dd></div>` : "",
+      j.location ? `<div class="stat"><dt>Where</dt><dd>${esc(j.location)}</dd></div>` : "",
+      `<div class="stat"><dt>Closes</dt><dd>${j.deadline ? esc(fmtDate(j.deadline)) : "No date given"}</dd></div>`,
+      j._pay && p && p.big !== j._pay.label && !j._pay.unstated ? `<div class="stat wide"><dt>Pay as advertised</dt><dd>${esc(j._pay.label)}</dd></div>` : "",
+    ].join("");
+    const posted = [j.posted_date && `Posted ${ago(j.posted_date).toLowerCase()}`, j.portal && j.portal !== "sample" && `via ${j.portal.replace(/-search$/, "")}`].filter(Boolean).join(" · ");
+    $("#detail-body").innerHTML = `
+      <div class="d-head">${avatar(j)}<div><h2 class="d-title" id="detail-title">${esc(j.title)}</h2><div class="d-company">${esc(j.company || "")}</div></div></div>
+      <div class="chips d-chips">${chips(j, { full: true })}</div>
+      <dl class="stats">${stats}</dl>
+      <div id="apply-box">${applyStatusHtml(j)}</div>
+      ${j.description ? `<div class="section"><h3>About the job</h3><p>${esc(j.description)}</p></div>` : ""}
+      ${bl(j.strengths) ? `<div class="section"><h3>Why it fits</h3>${bl(j.strengths)}</div>` : ""}
+      ${bl(j.gaps) ? `<div class="section"><h3>Worth checking</h3>${bl(j.gaps, "warn")}</div>` : ""}
+      ${j.language_note ? `<div class="section"><h3>Language</h3><p>${esc(j.language_note)}</p></div>` : ""}
+      ${url ? `<a class="btn btn-ghost btn-block open-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${ICON.ext} Open the job advert</a>` : ""}
+      <label class="row-toggle switch"><span>I've applied myself</span><input type="checkbox" data-self-applied="${esc(j.key)}" ${m.state === "applied" ? "checked" : ""}></label>
+      <div class="section"><h3>Notes</h3><textarea class="notes" data-note="${esc(j.key)}" placeholder="E.g. called the shop, interview Tuesday 10am">${esc(m.note || "")}</textarea></div>
+      ${posted ? `<p class="hint center">${esc(posted)}</p>` : ""}`;
+    renderDetailBar(j);
   }
 
+  function renderDetailBar(j) {
+    const m = mark(j.key);
+    const ar = applyReq(j.key);
+    let main;
+    if (state.mode === "static") main = safeUrl(j.url) ? `<a class="btn btn-primary grow" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener noreferrer">${ICON.ext}Open advert</a>` : `<span class="grow"></span>`;
+    else if (!ar) main = `<button class="btn btn-accent grow" data-apply="${esc(j.key)}">${ICON.send}Apply for me</button>`;
+    else if (ar.status === "requested") main = `<button class="btn btn-ghost grow" data-apply-cancel="${esc(j.key)}">Cancel request</button>`;
+    else main = `<button class="btn btn-soft grow" disabled>${ICON.check}${esc(APPLY_LABEL[ar.status] || ar.status)}</button>`;
+    $("#detail-bar").innerHTML = `
+      <button class="btn btn-ghost square" data-act="hidden" data-key="${esc(j.key)}" aria-pressed="${m.state === "hidden"}" aria-label="Not for me">${ICON.x}</button>
+      <button class="btn btn-ghost square" data-act="saved" data-key="${esc(j.key)}" aria-pressed="${m.state === "saved"}" aria-label="${m.state === "saved" ? "Saved" : "Save"}">${ICON.bookmark}</button>
+      ${main}`;
+  }
+
+  function applyStatusHtml(j) {
+    const r = applyReq(j.key);
+    if (!r) return "";
+    const info = {
+      requested: ["Application requested", "It'll be drafted on the next run. You can cancel until then."],
+      drafted: ["Application drafted", "Check it before it's sent."],
+      applied: ["Applied for you", r.updated_at ? `On ${fmtDate(String(r.updated_at).slice(0, 10))}` : ""],
+      failed: ["Couldn't apply automatically", r.note || "Try applying through the advert."],
+    }[r.status] || [r.status, ""];
+    return `<div class="apply-card${r.status === "failed" ? " failed" : ""}"><span class="ac-icon">${r.status === "failed" ? ICON.x : ICON.check}</span><div><b>${esc(info[0])}</b><span>${esc(info[1])}</span></div></div>`;
+  }
+
+  function refreshDetail() {
+    if (!$("#detail").open || !state.openKey) return;
+    const j = state.jobs.find((x) => x.key === state.openKey);
+    if (!j) return;
+    $("#apply-box").innerHTML = applyStatusHtml(j);
+    renderDetailBar(j);
+    const cb = $("[data-self-applied]"); if (cb) cb.checked = mark(j.key).state === "applied";
+  }
+
+  // ---------- apply for me ----------
   let applySaving = Promise.resolve();
   function saveApply() {
     const data = state.applyRequests;
@@ -539,16 +730,23 @@
     return applySaving;
   }
 
+  function askApply(key) {
+    const j = state.jobs.find((x) => x.key === key);
+    if (!j) return;
+    state.confirmKey = key;
+    $("#confirm-text").textContent = `${j.title}${j.company ? ` at ${j.company}` : ""}. An application will be drafted for you to check.`;
+    openSheet($("#confirm"));
+  }
+
   async function requestApply(key) {
     const j = state.jobs.find((x) => x.key === key);
     if (!j) return;
-    if (!confirm(`Ask for an application to ${j.title}${j.company ? ` at ${j.company}` : ""}?`)) return;
     const now = new Date().toISOString();
     const entry = { key, url: j.url || "", title: j.title, company: j.company || "", requested_at: now, updated_at: now, status: "requested" };
     state.applyRequests = mergeApply(state.applyRequests, [entry]);
-    refreshApplyBox(key);
+    render(); refreshDetail();
     try { await saveApply(); toast("Application requested"); }
-    catch { state.applyRequests = state.applyRequests.filter((r) => r !== entry); refreshApplyBox(key); toast("Couldn't send the request. Try again."); }
+    catch { state.applyRequests = state.applyRequests.filter((r) => r !== entry); render(); refreshDetail(); toast("Couldn't send the request. Try again."); }
   }
 
   async function cancelApply(key) {
@@ -556,18 +754,12 @@
     if (!r || r.status !== "requested") return;
     const cancelled = { ...r, status: "cancelled", updated_at: new Date().toISOString() };
     state.applyRequests = mergeApply(state.applyRequests, [cancelled]);
-    refreshApplyBox(key);
+    render(); refreshDetail();
     try { await saveApply(); toast("Request cancelled"); }
     catch { toast("Couldn't cancel. Try again."); }
   }
 
-  function refreshApplyBox(key) {
-    const box = $("#apply-box");
-    const j = state.jobs.find((x) => x.key === key);
-    if (box && j) box.innerHTML = applyBox(j);
-    render();
-  }
-
+  // ---------- marks ----------
   function setMark(key, patch, rerender = true) {
     const prev = state.marks[key] || {};
     const next = { ...prev, ...patch, updated: new Date().toISOString() };
@@ -581,17 +773,19 @@
   function toggleState(key, s) {
     const prev = mark(key).state;
     const nextState = prev === s ? undefined : s;
-    setMark(key, { state: nextState, seen: true });
-    if ($("#detail").open) refreshDetailActions(key);
-    if (nextState === "hidden") toast("Hidden from your list", () => { setMark(key, { state: prev }); if ($("#detail").open) refreshDetailActions(key); });
+    const li = $(`.swipe[data-key="${CSS.escape(key)}"]`);
+    const leaving = nextState === "hidden" && li && state.tab === "all" && !state.showHidden;
+    const commit = () => {
+      setMark(key, { state: nextState, seen: true });
+      refreshDetail();
+      if (nextState === "saved") { const b = $(`.swipe[data-key="${CSS.escape(key)}"] .save-fab`); if (b) b.classList.add("pop"); }
+    };
+    if (leaving && !matchMedia("(prefers-reduced-motion: reduce)").matches) { li.classList.add("leaving"); setTimeout(commit, 280); }
+    else commit();
+    if (nextState === "hidden") toast("Hidden from your list", () => { setMark(key, { state: prev }); refreshDetail(); });
     else if (nextState === "saved") toast("Saved");
     else if (nextState === "applied") toast("Marked as applied. Good luck!");
-  }
-
-  function refreshDetailActions(key) {
-    const j = state.jobs.find((x) => x.key === key);
-    const box = $("#detail .sheet-actions");
-    if (j && box) box.innerHTML = actionButtons(j);
+    else if (prev === "saved") toast("Removed from saved");
   }
 
   // ---------- criteria ----------
@@ -608,6 +802,7 @@
     for (const el of f.elements) {
       if (!el.name || !(el.name in c)) continue;
       if (el.type === "checkbox") el.checked = !!c[el.name];
+      else if (el.type === "radio") el.checked = el.value === c[el.name];
       else el.value = Array.isArray(c[el.name]) ? c[el.name].join(", ") : (c[el.name] ?? "");
     }
   }
@@ -616,17 +811,18 @@
     const f = e.target; const data = {};
     for (const el of f.elements) {
       if (!el.name) continue;
+      if (el.type === "radio") { if (el.checked) data[el.name] = el.value; continue; }
       data[el.name] = el.type === "checkbox" ? el.checked : el.value;
     }
     state.criteria = normaliseCriteria(data);
     const status = $("#criteria-status");
     if (state.mode === "static") {
       ls.set(LS.criteria, state.criteria);
-      status.textContent = "Saved on this phone only. Connect to GitHub below so the search can use it.";
+      status.textContent = "Saved on this phone only. Connect your job list below so the search can use it.";
     } else if (state.mode === "github") {
       try {
         await gh.write(GH_PATHS.criteria, state.criteria, "Update search criteria from Job Finder");
-        status.textContent = "Saved to GitHub. The next search will use these settings.";
+        status.textContent = "Saved. The next search will use these settings.";
       } catch {
         ls.set(LS.criteria, state.criteria);
         status.textContent = "Couldn't save to GitHub, so this is saved on this phone only.";
@@ -640,7 +836,7 @@
         status.textContent = "Couldn't reach the server, so this is saved on this phone only.";
       }
     }
-    toast("Criteria saved");
+    toast("Settings saved");
     render();
   }
 
@@ -648,20 +844,20 @@
   function showBanner(msg) { const b = $("#banner"); b.textContent = msg; b.hidden = !msg; }
   function updateBanner(msg) {
     if (msg) showBanner(msg);
-    else if (state.sample) showBanner("Showing sample jobs. Connect to GitHub (Criteria tab) to see the real list.");
+    else if (state.sample) showBanner("These are sample jobs. Connect your job list in Settings to see the real ones.");
     else showBanner("");
   }
 
-  // ---------- GitHub connection form ----------
+  // ---------- GitHub connection ----------
   function fillGithubForm() {
     const f = $("#github-form"); if (!f) return;
     const c = gh.cfg();
     f.elements.repo.value = `${c.owner}/${c.repo}`;
     f.elements.token.value = "";
-    f.elements.token.placeholder = c.token ? "Saved on this phone (enter a new one to replace)" : "github_pat_…";
-    $("#github-status").textContent = state.mode === "github"
-      ? `Connected to ${c.owner}/${c.repo}.`
-      : c.token ? "Not connected: GitHub didn't accept the key." : "Not connected.";
+    f.elements.token.placeholder = c.token ? "Saved on this phone" : "github_pat_…";
+    const st = $("#github-status");
+    st.textContent = state.mode === "github" ? "Connected" : c.token ? "Key not accepted" : "Not connected";
+    st.className = "status-pill" + (state.mode === "github" ? " ok" : c.token ? " bad" : "");
     $("#github-disconnect").hidden = !c.token;
   }
   async function saveGithub(e) {
@@ -670,14 +866,16 @@
     const [owner, repo] = f.elements.repo.value.trim().split("/").map((s) => s.trim());
     const prev = gh.cfg();
     const token = f.elements.token.value.trim() || prev.token;
-    if (!owner || !repo || !token) { $("#github-status").textContent = "Enter the repo (owner/name) and an access key."; return; }
+    if (!owner || !repo || !token) { toast("Enter the repo (owner/name) and an access key."); return; }
     ls.set(LS.gh, { ...prev, owner, repo, token });
     await loadAll();
-    toast(state.mode === "github" ? "Connected to GitHub" : "Couldn't connect. Check the key.");
+    toast(state.mode === "github" ? "Connected. Your jobs are loading." : "Couldn't connect. Check the key.");
+    if (state.mode === "github") { state.tab = "all"; render(); window.scrollTo({ top: 0 }); }
   }
   let toastTimer = null;
   function toast(msg, undo) {
     const t = $("#toast");
+    t.hidden = true; void t.offsetWidth; // restart the entry animation
     t.innerHTML = `<span>${esc(msg)}</span>${undo ? "<button type=\"button\">Undo</button>" : ""}`;
     t.hidden = false;
     if (undo) t.querySelector("button").onclick = () => { undo(); t.hidden = true; };
@@ -690,53 +888,64 @@
   (() => {
     const p = ls.get(LS.prefs, null);
     if (p) { state.filters = new Set(p.filters || []); state.sort = p.sort || "score"; }
-    $("#sort").value = state.sort;
   })();
 
   document.addEventListener("click", (e) => {
+    if (suppressClick && e.target.closest("#job-list")) { e.preventDefault(); e.stopPropagation(); return; }
     const ap = e.target.closest("[data-apply]");
-    if (ap) { requestApply(ap.dataset.apply); return; }
+    if (ap) { askApply(ap.dataset.apply); return; }
     const apc = e.target.closest("[data-apply-cancel]");
     if (apc) { cancelApply(apc.dataset.applyCancel); return; }
     const act = e.target.closest("[data-act]");
     if (act) { toggleState(act.dataset.key, act.dataset.act); return; }
     const open = e.target.closest("[data-open]");
     if (open) { openDetail(open.dataset.open); return; }
-    const chip = e.target.closest(".chip");
-    if (chip) {
-      const f = chip.dataset.filter;
-      state.filters.has(f) ? state.filters.delete(f) : state.filters.add(f);
-      savePrefs(); render(); return;
-    }
+    const sc = e.target.closest("[data-scope]");
+    if (sc) { sc.dataset.scope === "match" ? state.filters.add("match") : state.filters.delete("match"); savePrefs(); render(); return; }
+    const tg = e.target.closest("#filter-toggles .toggle");
+    if (tg) { const f = tg.dataset.filter; state.filters.has(f) ? state.filters.delete(f) : state.filters.add(f); savePrefs(); render(); return; }
     const tab = e.target.closest(".tab");
-    if (tab) { state.tab = tab.dataset.tab; state.showHidden = false; render(); window.scrollTo({ top: 0 }); return; }
-    if (e.target.closest("[data-clear-filters]")) { state.filters.clear(); savePrefs(); render(); return; }
+    if (tab) {
+      if (state.tab === tab.dataset.tab) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+      state.tab = tab.dataset.tab; state.showHidden = false; render(); window.scrollTo({ top: 0 }); return;
+    }
+    if (e.target.closest("[data-clear-filters]")) { state.filters = new Set(); savePrefs(); render(); return; }
     if (e.target.closest("[data-show-hidden]")) { state.showHidden = true; render(); return; }
     if (e.target.closest("[data-goto-criteria]")) { state.tab = "criteria"; render(); $("#github-form").scrollIntoView(); return; }
+  }, true);
+
+  document.addEventListener("change", (e) => {
+    const sa = e.target.closest("[data-self-applied]");
+    if (sa) { if ((mark(sa.dataset.selfApplied).state === "applied") !== sa.checked) toggleState(sa.dataset.selfApplied, "applied"); return; }
+    if (e.target.name === "sort" && e.target.closest("#sort-pills")) { state.sort = e.target.value; savePrefs(); render(); }
   });
 
   let qTimer = null;
   $("#search").addEventListener("input", (e) => { clearTimeout(qTimer); qTimer = setTimeout(() => { state.query = e.target.value; render(); }, 120); });
-  $("#sort").addEventListener("change", (e) => { state.sort = e.target.value; savePrefs(); render(); });
   $("#refresh-btn").addEventListener("click", () => loadAll().then(() => toast("Up to date")));
+  $("#filter-btn").addEventListener("click", () => openSheet($("#filters")));
+  $("#filters-done").addEventListener("click", () => closeSheet($("#filters")));
+  $("#filters-clear").addEventListener("click", () => { const keep = state.filters.has("match"); state.filters = new Set(keep ? ["match"] : []); state.sort = "score"; savePrefs(); render(); });
+  $("#confirm-no").addEventListener("click", () => closeSheet($("#confirm")));
+  $("#confirm-yes").addEventListener("click", () => { const k = state.confirmKey; closeSheet($("#confirm")); if (k) requestApply(k); });
   $("#criteria-form").addEventListener("submit", saveCriteria);
   $("#github-form").addEventListener("submit", saveGithub);
   $("#github-disconnect").addEventListener("click", () => {
     ls.set(LS.gh, { ...gh.cfg(), token: "" });
     loadAll().then(() => toast("Disconnected. The key was removed from this phone."));
   });
-
-  const dlg = $("#detail");
-  $("#detail-close").addEventListener("click", () => dlg.close());
-  dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
-  dlg.addEventListener("input", (e) => {
+  $("#detail-close").addEventListener("click", () => closeSheet($("#detail")));
+  $("#detail").addEventListener("input", (e) => {
     const ta = e.target.closest("[data-note]");
     if (ta) setMark(ta.dataset.note, { note: ta.value }, false);
   });
-  // Swipe down on the sheet handle area to close.
-  let y0 = null;
-  dlg.addEventListener("touchstart", (e) => { const inner = $(".sheet-inner", dlg); y0 = inner.scrollTop <= 0 ? e.touches[0].clientY : null; }, { passive: true });
-  dlg.addEventListener("touchend", (e) => { if (y0 != null && e.changedTouches[0].clientY - y0 > 90) dlg.close(); y0 = null; });
+
+  // Shrink the header once the list scrolls.
+  let ticking = false;
+  window.addEventListener("scroll", () => {
+    if (ticking) return; ticking = true;
+    requestAnimationFrame(() => { $("#hero").classList.toggle("compact", state.tab !== "all" || window.scrollY > 40); ticking = false; });
+  }, { passive: true });
 
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && state.mode !== "static") loadAll(); });
 
@@ -747,5 +956,7 @@
   // Exposed for tests.
   window.__jf = { parsePay, schoolHours, parseTimeRanges, state, mergeMarks, mergeApply };
 
-  loadAll();
+  state.loading = true;
+  render();
+  loadAll().finally(() => { state.loading = false; render(); });
 })();
