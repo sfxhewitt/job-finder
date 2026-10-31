@@ -88,15 +88,17 @@
         <p id="criteria-status" class="hint center" aria-live="polite"></p>
       </form>
 
-      <form id="github-form" class="settings" autocomplete="off">
+      <form id="github-form" class="settings" autocomplete="on" action="#" method="post">
         <h2 class="group-title">Your job list</h2>
         <div class="group">
           <div class="row"><span>Status</span><span class="status-pill" id="github-status">Not connected</span></div>
-          <label class="row stack"><span>Repository</span><input name="repo" type="text" placeholder="owner/repo" autocapitalize="off" spellcheck="false"></label>
-          <label class="row stack"><span>Access key</span><input name="token" type="password" placeholder="github_pat_…" autocapitalize="off" spellcheck="false"></label>
+          <label class="row stack"><span>Repository</span><input name="repo" id="gh-repo" type="text" autocomplete="username" placeholder="owner/repo" autocapitalize="off" spellcheck="false"></label>
+          <label class="row stack"><span>Access key</span><input name="token" id="gh-token" type="password" autocomplete="current-password" placeholder="github_pat_…" autocapitalize="off" spellcheck="false"></label>
         </div>
-        <p class="hint">Jobs, saved jobs and settings stay in your private GitHub repo. Paste a key once and this phone remembers it. Nobody without the key can see the list.</p>
+        <p class="hint">Jobs, saved jobs and settings stay in your private GitHub repo. Paste a key once and this phone remembers it. When your phone offers to save it as a password, say yes, so it can fill it in for you if it is ever forgotten. Nobody without the key can see the list.</p>
         <button type="submit" class="btn btn-primary btn-block">Connect</button>
+        <button type="button" class="btn btn-ghost btn-block" id="github-link" hidden>Copy my sign-in link</button>
+        <p class="hint" id="github-link-hint" hidden>This link signs any phone in automatically. Bookmark it or keep it in your notes, and never share it, because it contains your key.</p>
         <button type="button" class="btn btn-ghost btn-block danger" id="github-disconnect" hidden>Disconnect and forget the key</button>
         <details class="howto">
           <summary>How to get an access key</summary>

@@ -859,6 +859,8 @@
     st.textContent = state.mode === "github" ? "Connected" : c.token ? "Key not accepted" : "Not connected";
     st.className = "status-pill" + (state.mode === "github" ? " ok" : c.token ? " bad" : "");
     $("#github-disconnect").hidden = !c.token;
+    $("#github-link").hidden = !c.token;
+    $("#github-link-hint").hidden = !c.token;
   }
   async function saveGithub(e) {
     e.preventDefault();
@@ -868,9 +870,35 @@
     const token = f.elements.token.value.trim() || prev.token;
     if (!owner || !repo || !token) { toast("Enter the repo (owner/name) and an access key."); return; }
     ls.set(LS.gh, { ...prev, owner, repo, token });
+    rememberKey(owner, repo, token);
     await loadAll();
     toast(state.mode === "github" ? "Connected. Your jobs are loading." : "Couldn't connect. Check the key.");
     if (state.mode === "github") { state.tab = "all"; render(); window.scrollTo({ top: 0 }); }
+  }
+  // Keep the key safe across updates and lost browser storage:
+  // ask the browser not to evict storage, and offer the key to the password manager.
+  function rememberKey(owner, repo, token) {
+    try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch { /* unsupported */ }
+    try {
+      if (window.PasswordCredential && navigator.credentials) {
+        navigator.credentials.store(new PasswordCredential({ id: `${owner}/${repo}`, password: token, name: "Job Finder" })).catch(() => {});
+      }
+    } catch { /* unsupported */ }
+  }
+  // A sign-in link (#key=...) restores the key on any phone. The part after # never leaves the phone.
+  function consumeKeyLink() {
+    const m = location.hash.match(/(?:^#|&)key=([^&]+)/);
+    if (!m) return;
+    const token = decodeURIComponent(m[1]);
+    const r = location.hash.match(/(?:^#|&)repo=([^&]+)/);
+    const [owner, repo] = r ? decodeURIComponent(r[1]).split("/") : [gh.cfg().owner, gh.cfg().repo];
+    ls.set(LS.gh, { ...gh.cfg(), owner, repo, token });
+    rememberKey(owner, repo, token);
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+  function keyLink() {
+    const c = gh.cfg();
+    return `${location.origin}${location.pathname}#repo=${encodeURIComponent(c.owner + "/" + c.repo)}&key=${encodeURIComponent(c.token)}`;
   }
   let toastTimer = null;
   function toast(msg, undo) {
@@ -930,6 +958,11 @@
   $("#confirm-yes").addEventListener("click", () => { const k = state.confirmKey; closeSheet($("#confirm")); if (k) requestApply(k); });
   $("#criteria-form").addEventListener("submit", saveCriteria);
   $("#github-form").addEventListener("submit", saveGithub);
+  $("#github-link").addEventListener("click", async () => {
+    const link = keyLink();
+    try { await navigator.clipboard.writeText(link); toast("Sign-in link copied. Keep it private."); }
+    catch { window.prompt("Copy your sign-in link and keep it private:", link); }
+  });
   $("#github-disconnect").addEventListener("click", () => {
     ls.set(LS.gh, { ...gh.cfg(), token: "" });
     loadAll().then(() => toast("Disconnected. The key was removed from this phone."));
@@ -956,6 +989,8 @@
   // Exposed for tests.
   window.__jf = { parsePay, schoolHours, parseTimeRanges, state, mergeMarks, mergeApply };
 
+  consumeKeyLink();
+  if (gh.configured()) { try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch { /* unsupported */ } }
   state.loading = true;
   render();
   loadAll().finally(() => { state.loading = false; render(); });
