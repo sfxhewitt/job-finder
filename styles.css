@@ -432,3 +432,10 @@ main { max-width: 680px; margin: 0 auto; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* Prepared documents */
+.doc-list { display: grid; gap: 8px; }
+.doc-btn { justify-content: flex-start; gap: 10px; }
+.doc-btn svg { color: var(--brand); flex: none; }
+.icon-pill.status { padding: 0 12px; }
+#detail-bar .btn-soft[aria-pressed="true"] { background: var(--good-soft); color: var(--good); }

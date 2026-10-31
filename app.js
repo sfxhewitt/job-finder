@@ -9,10 +9,7 @@
   const MIN_WAGE = 12.71; // UK National Living Wage (21+) from April 2026
   const LS = { marks: "jf.marks", criteria: "jf.criteria", prefs: "jf.prefs", token: "jf.token", gh: "jf.github" };
   const GH_DEFAULTS = { owner: "sfxhewitt", repo: "job-searcher", branch: "main", token: "" };
-  const GH_PATHS = { jobs: "web/data/jobs.json", marks: "web/data/marks.json", criteria: "search_criteria.json", apply: "web/data/apply_requests.json" };
-  // "Apply for me" requests: [{ key, url, title, company, requested_at, updated_at, status, note? }]
-  // status: requested -> drafted -> applied (set by the apply workflow), or cancelled / failed.
-  const APPLY_LABEL = { requested: "Apply requested", drafted: "Application drafted", applied: "Applied for you", failed: "Couldn't apply", cancelled: "" };
+  const GH_PATHS = { jobs: "web/data/jobs.json", marks: "web/data/marks.json", criteria: "search_criteria.json", docs: "web/data/documents.json", docsDir: "documents/applications" };
   const DEFAULT_CRITERIA = {
     // Generic defaults: the real criteria come from search_criteria.json in the private repo.
     candidate: "", locations: [], remote_ok: true, hours: "any", school_hours: false,
@@ -25,7 +22,7 @@
     jobs: [],
     source: "",
     sample: false,
-    applyRequests: [],
+    docs: {},                // job key -> [{ label, path }] prepared CVs / cover letters
     marks: {},               // key -> { state: "saved"|"applied"|"hidden"|undefined, seen: bool, note: string, updated: iso }
     criteria: { ...DEFAULT_CRITERIA },
     tab: "all",
@@ -124,20 +121,6 @@
   }
 
   // Newest edit per job wins when two devices save marks at the same time.
-  // Merge apply requests by job key; whichever side touched an entry last wins,
-  // so status updates from the apply workflow are never overwritten by an older copy.
-  function mergeApply(remote, local) {
-    const byKey = new Map();
-    for (const r of Array.isArray(remote) ? remote : []) if (r && r.key) byKey.set(r.key, r);
-    for (const l of Array.isArray(local) ? local : []) {
-      if (!l || !l.key) continue;
-      const r = byKey.get(l.key);
-      const t = (x) => String(x.updated_at || x.requested_at || "");
-      if (!r || t(l) > t(r)) byKey.set(l.key, l);
-    }
-    return [...byKey.values()];
-  }
-
   function mergeMarks(remote, local) {
     const out = { ...(remote || {}) };
     for (const [k, v] of Object.entries(local || {})) {
@@ -150,7 +133,7 @@
     const [jobs, marks, criteria] = await Promise.all([
       gh.read(GH_PATHS.jobs, null), gh.read(GH_PATHS.marks, {}), gh.read(GH_PATHS.criteria, {}),
     ]);
-    state.applyRequests = await gh.read(GH_PATHS.apply, []).catch(() => []);
+    state.docs = await gh.read(GH_PATHS.docs, {}).catch(() => ({}));
     state.mode = "github";
     if (jobs) applyJobs({ jobs: toJobList(jobs), source: `${gh.cfg().repo}/${GH_PATHS.jobs}`, sample: false });
     else applyJobs({ jobs: [], source: "", sample: false });
@@ -173,7 +156,6 @@
       } else {
         try {
           const [jobs, marks, criteria] = await Promise.all([api("api/jobs"), api("api/marks"), api("api/criteria")]);
-          state.applyRequests = await api("api/apply").catch(() => []);
           state.mode = "server";
           applyJobs(jobs);
           state.marks = marks && typeof marks === "object" ? marks : {};
@@ -348,7 +330,6 @@
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
   const safeUrl = (u) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
   const mark = (k) => state.marks[k] || {};
-  const applyReq = (k) => (Array.isArray(state.applyRequests) ? state.applyRequests : []).find((r) => r.key === k && r.status !== "cancelled");
   const fmtDate = (d) => {
     if (!d) return "";
     const dt = new Date(d + "T00:00:00");
@@ -399,7 +380,7 @@
     const q = state.query.trim().toLowerCase();
     let list = state.jobs.filter((j) => j.status !== "expired" || q);
     if (state.tab === "saved") list = list.filter((j) => mark(j.key).state === "saved");
-    else if (state.tab === "applied") list = list.filter((j) => mark(j.key).state === "applied" || applyReq(j.key));
+    else if (state.tab === "applied") list = list.filter((j) => mark(j.key).state === "applied").sort((a, b) => String(mark(b.key).applied_at || "").localeCompare(String(mark(a.key).applied_at || "")));
     else {
       if (!state.showHidden) list = list.filter((j) => mark(j.key).state !== "hidden");
       const f = state.filters;
@@ -437,6 +418,7 @@
     cal: I('<rect x="4" y="5" width="16" height="15" rx="3" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M4 10h16M9 3v4M15 3v4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>'),
     home: I('<path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>'),
     ext: I('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>'),
+    doc: I('<path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M14 3v4h4M9 12h6M9 16h6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>'),
     search: I('<circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>'),
     spark: I('<path d="M12 3l2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>'),
     key: I('<circle cx="8" cy="15" r="4" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m11 12 9-9M17 6l3 3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>'),
@@ -444,8 +426,8 @@
 
   function chips(j, { full = false } = {}) {
     const t = [];
-    const ar = applyReq(j.key);
-    if (ar && APPLY_LABEL[ar.status] && !full) t.push(`<span class="chip ${ar.status === "failed" ? "bad" : "brand"}">${ICON.send}${esc(APPLY_LABEL[ar.status])}</span>`);
+    const am = mark(j.key);
+    if (am.state === "applied" && !full) t.push(`<span class="chip brand">${ICON.check}Applied${am.applied_at ? ` ${esc(fmtDate(String(am.applied_at).slice(0, 10)))}` : ""}</span>`);
     if (j.location && !full) t.push(`<span class="chip">${ICON.pin}${esc(j.location)}</span>`);
     if (j._school) t.push(`<span class="chip hl">${ICON.sun}School hours</span>`);
     else if (j.hours && !full) {
@@ -470,13 +452,10 @@
 
   function cardHtml(j, i) {
     const m = mark(j.key);
-    const ar = applyReq(j.key);
     const saved = m.state === "saved";
+    const applied = m.state === "applied";
     const foot = [ago(j.posted_date || j.first_seen), j.portal && j.portal !== "websearch" ? j.portal.replace(/-search$/, "") : ""].filter(Boolean).join(" · ");
-    let applyBtn;
-    if (ar) applyBtn = `<button class="icon-pill status${ar.status === "failed" ? " failed" : ""}" data-open="${esc(j.key)}">${ar.status === "failed" ? ICON.x : ICON.check}${esc({ requested: "Requested", drafted: "Drafted", applied: "Applied", failed: "Failed" }[ar.status] || ar.status)}</button>`;
-    else if (state.mode !== "static") applyBtn = `<button class="icon-pill apply" data-apply="${esc(j.key)}">${ICON.send}Apply</button>`;
-    else applyBtn = "";
+    const applyBtn = `<button class="icon-pill ${applied ? "status" : "apply"}" data-act="applied" data-key="${esc(j.key)}" aria-pressed="${applied}">${ICON.check}${applied ? "Applied" : "I've applied"}</button>`;
     return `<li class="swipe" data-key="${esc(j.key)}" style="--i:${Math.min(i, 12)}">
       <div class="swipe-bg" aria-hidden="true"><span class="l">${ICON.bookmark}Save</span><span class="r">Not for me${ICON.x}</span></div>
       <article class="card${m.state === "hidden" ? " is-hidden" : ""}">
@@ -552,7 +531,7 @@
       if (!state.jobs.length && state.mode === "static") empty.innerHTML = emptyHtml("key", "Connect your job list", "Add your access key in Settings to see the real jobs.", '<br><button class="btn btn-primary" data-goto-criteria>Open settings</button>');
       else if (!state.jobs.length) empty.innerHTML = emptyHtml("jobs", "No jobs yet", "They'll appear here after the next search.");
       else if (state.tab === "saved") empty.innerHTML = emptyHtml("saved", "Nothing saved yet", "Tap the bookmark on a job, or swipe it right, to keep it here.");
-      else if (state.tab === "applied") empty.innerHTML = emptyHtml("applied", "No applications yet", "Tap Apply on a job you like and it'll show up here.");
+      else if (state.tab === "applied") empty.innerHTML = emptyHtml("applied", "No applications yet", "When you've applied for a job, tap “I've applied” and it'll be listed here with the date.");
       else empty.innerHTML = emptyHtml("jobs", "No jobs match", "Try fewer filters, or look at all jobs.",
         `<br><button class="btn btn-soft" data-clear-filters>Show all jobs</button>${hiddenN && !state.showHidden ? `<br><button class="link" data-show-hidden>Show ${hiddenN} you hid</button>` : ""}`);
     }
@@ -647,6 +626,7 @@
     state.openKey = key;
     setMark(key, { seen: true }, false);
     renderDetail(j);
+    if (!Array.isArray(state.docs[key])) findDocs(j).then(() => { if (state.openKey === key && $("#docs-box")) $("#docs-box").innerHTML = docsHtml(j); });
     const dlg = $("#detail");
     openSheet(dlg);
     $("#detail .sheet-scroll").scrollTop = 0;
@@ -672,12 +652,12 @@
       <div class="chips d-chips">${chips(j, { full: true })}</div>
       <dl class="stats">${stats}</dl>
       <div id="apply-box">${applyStatusHtml(j)}</div>
+      ${url ? `<a class="btn btn-ghost btn-block open-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${ICON.ext} Open the job advert</a>` : ""}
+      <div id="docs-box">${docsHtml(j)}</div>
       ${j.description ? `<div class="section"><h3>About the job</h3><p>${esc(j.description)}</p></div>` : ""}
       ${bl(j.strengths) ? `<div class="section"><h3>Why it fits</h3>${bl(j.strengths)}</div>` : ""}
       ${bl(j.gaps) ? `<div class="section"><h3>Worth checking</h3>${bl(j.gaps, "warn")}</div>` : ""}
       ${j.language_note ? `<div class="section"><h3>Language</h3><p>${esc(j.language_note)}</p></div>` : ""}
-      ${url ? `<a class="btn btn-ghost btn-block open-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${ICON.ext} Open the job advert</a>` : ""}
-      <label class="row-toggle switch"><span>I've applied myself</span><input type="checkbox" data-self-applied="${esc(j.key)}" ${m.state === "applied" ? "checked" : ""}></label>
       <div class="section"><h3>Notes</h3><textarea class="notes" data-note="${esc(j.key)}" placeholder="E.g. called the shop, interview Tuesday 10am">${esc(m.note || "")}</textarea></div>
       ${posted ? `<p class="hint center">${esc(posted)}</p>` : ""}`;
     renderDetailBar(j);
@@ -685,12 +665,9 @@
 
   function renderDetailBar(j) {
     const m = mark(j.key);
-    const ar = applyReq(j.key);
-    let main;
-    if (state.mode === "static") main = safeUrl(j.url) ? `<a class="btn btn-primary grow" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener noreferrer">${ICON.ext}Open advert</a>` : `<span class="grow"></span>`;
-    else if (!ar) main = `<button class="btn btn-accent grow" data-apply="${esc(j.key)}">${ICON.send}Apply for me</button>`;
-    else if (ar.status === "requested") main = `<button class="btn btn-ghost grow" data-apply-cancel="${esc(j.key)}">Cancel request</button>`;
-    else main = `<button class="btn btn-soft grow" disabled>${ICON.check}${esc(APPLY_LABEL[ar.status] || ar.status)}</button>`;
+    const main = m.state === "applied"
+      ? `<button class="btn btn-soft grow" data-act="applied" data-key="${esc(j.key)}" aria-pressed="true">${ICON.check}Applied${m.applied_at ? ` ${esc(fmtDate(String(m.applied_at).slice(0, 10)))}` : ""}</button>`
+      : `<button class="btn btn-accent grow" data-act="applied" data-key="${esc(j.key)}" aria-pressed="false">${ICON.check}I've applied</button>`;
     $("#detail-bar").innerHTML = `
       <button class="btn btn-ghost square" data-act="hidden" data-key="${esc(j.key)}" aria-pressed="${m.state === "hidden"}" aria-label="Not for me">${ICON.x}</button>
       <button class="btn btn-ghost square" data-act="saved" data-key="${esc(j.key)}" aria-pressed="${m.state === "saved"}" aria-label="${m.state === "saved" ? "Saved" : "Save"}">${ICON.bookmark}</button>
@@ -698,15 +675,54 @@
   }
 
   function applyStatusHtml(j) {
-    const r = applyReq(j.key);
-    if (!r) return "";
-    const info = {
-      requested: ["Application requested", "It'll be drafted on the next run. You can cancel until then."],
-      drafted: ["Application drafted", "Check it before it's sent."],
-      applied: ["Applied for you", r.updated_at ? `On ${fmtDate(String(r.updated_at).slice(0, 10))}` : ""],
-      failed: ["Couldn't apply automatically", r.note || "Try applying through the advert."],
-    }[r.status] || [r.status, ""];
-    return `<div class="apply-card${r.status === "failed" ? " failed" : ""}"><span class="ac-icon">${r.status === "failed" ? ICON.x : ICON.check}</span><div><b>${esc(info[0])}</b><span>${esc(info[1])}</span></div></div>`;
+    const m = mark(j.key);
+    if (m.state !== "applied") return "";
+    const when = m.applied_at ? `On ${fmtDate(String(m.applied_at).slice(0, 10))}` : "";
+    return `<div class="apply-card"><span class="ac-icon">${ICON.check}</span><div><b>You've applied</b><span>${esc(when || "Good luck!")}</span></div></div>`;
+  }
+
+  // ---------- prepared documents (CV, cover letter) ----------
+  // Listed in web/data/documents.json ({ jobKey: [{ label, path }] }); otherwise found by
+  // looking for a documents/applications/<company>_... folder in the private repo.
+  const slug = (s) => String(s || "").toLowerCase().replace(/&/g, "and").replace(/\(.*?\)/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const docLabel = (name) => /cover/i.test(name) ? "Cover letter" : /cv|_cv_|^cv|cv_draft|resume/i.test(name) ? "CV" : name.replace(/\.[a-z]+$/i, "").replace(/[_-]+/g, " ");
+  let docDirs = null;
+  async function findDocs(j) {
+    if (Array.isArray(state.docs[j.key])) return state.docs[j.key];
+    if (state.mode !== "github") return [];
+    try {
+      if (!docDirs) {
+        const res = await fetch(`${gh.url(GH_PATHS.docsDir)}?ref=${encodeURIComponent(gh.cfg().branch)}`, { headers: gh.headers(), cache: "no-store" });
+        docDirs = res.ok ? (await res.json()).filter((x) => x.type === "dir").map((x) => x.name) : [];
+      }
+      const co = slug(j.company).split("_").slice(0, 2).join("_");
+      const dir = co && docDirs.find((d) => d.startsWith(co));
+      if (!dir) return (state.docs[j.key] = []);
+      const res = await fetch(`${gh.url(`${GH_PATHS.docsDir}/${dir}`)}?ref=${encodeURIComponent(gh.cfg().branch)}`, { headers: gh.headers(), cache: "no-store" });
+      const files = res.ok ? (await res.json()).filter((x) => x.type === "file" && /\.(pdf|docx?)$/i.test(x.name)) : [];
+      const pdfs = files.filter((f) => /\.pdf$/i.test(f.name));
+      return (state.docs[j.key] = (pdfs.length ? pdfs : files).map((f) => ({ label: docLabel(f.name), path: f.path })));
+    } catch { return []; }
+  }
+  function docsHtml(j) {
+    const list = state.docs[j.key];
+    if (!Array.isArray(list) || !list.length) return "";
+    return `<div class="section"><h3>Your documents</h3><div class="doc-list">${list.map((d, i) =>
+      `<button class="btn btn-ghost btn-block doc-btn" data-doc="${esc(j.key)}" data-doc-i="${i}">${ICON.doc}<span>${esc(d.label || d.path.split("/").pop())}</span></button>`).join("")}</div></div>`;
+  }
+  async function openDoc(key, i) {
+    const d = (state.docs[key] || [])[i];
+    if (!d) return;
+    const win = window.open("", "_blank"); // open now, so the phone doesn't block it as a pop-up
+    try {
+      const res = await fetch(`${gh.url(d.path.split("/").map(encodeURIComponent).join("/"))}?ref=${encodeURIComponent(gh.cfg().branch)}`, { headers: { ...gh.headers(), Accept: "application/vnd.github.raw+json" } });
+      if (!res.ok) throw new Error(String(res.status));
+      const type = /\.pdf$/i.test(d.path) ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      const url = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type }));
+      if (win) win.location.href = url;
+      else { const a = document.createElement("a"); a.href = url; a.download = d.path.split("/").pop(); a.click(); }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch { if (win) win.close(); toast("Couldn't open that document. Try again."); }
   }
 
   function refreshDetail() {
@@ -715,48 +731,6 @@
     if (!j) return;
     $("#apply-box").innerHTML = applyStatusHtml(j);
     renderDetailBar(j);
-    const cb = $("[data-self-applied]"); if (cb) cb.checked = mark(j.key).state === "applied";
-  }
-
-  // ---------- apply for me ----------
-  let applySaving = Promise.resolve();
-  function saveApply() {
-    const data = state.applyRequests;
-    const run = async () => {
-      if (state.mode === "github") await gh.write(GH_PATHS.apply, data, "Apply-for-me request from Job Finder", mergeApply);
-      else await api("api/apply", { method: "PUT", body: JSON.stringify(data) });
-    };
-    applySaving = applySaving.then(run, run);
-    return applySaving;
-  }
-
-  function askApply(key) {
-    const j = state.jobs.find((x) => x.key === key);
-    if (!j) return;
-    state.confirmKey = key;
-    $("#confirm-text").textContent = `${j.title}${j.company ? ` at ${j.company}` : ""}. An application will be drafted for you to check.`;
-    openSheet($("#confirm"));
-  }
-
-  async function requestApply(key) {
-    const j = state.jobs.find((x) => x.key === key);
-    if (!j) return;
-    const now = new Date().toISOString();
-    const entry = { key, url: j.url || "", title: j.title, company: j.company || "", requested_at: now, updated_at: now, status: "requested" };
-    state.applyRequests = mergeApply(state.applyRequests, [entry]);
-    render(); refreshDetail();
-    try { await saveApply(); toast("Application requested"); }
-    catch { state.applyRequests = state.applyRequests.filter((r) => r !== entry); render(); refreshDetail(); toast("Couldn't send the request. Try again."); }
-  }
-
-  async function cancelApply(key) {
-    const r = applyReq(key);
-    if (!r || r.status !== "requested") return;
-    const cancelled = { ...r, status: "cancelled", updated_at: new Date().toISOString() };
-    state.applyRequests = mergeApply(state.applyRequests, [cancelled]);
-    render(); refreshDetail();
-    try { await saveApply(); toast("Request cancelled"); }
-    catch { toast("Couldn't cancel. Try again."); }
   }
 
   // ---------- marks ----------
@@ -776,7 +750,8 @@
     const li = $(`.swipe[data-key="${CSS.escape(key)}"]`);
     const leaving = nextState === "hidden" && li && state.tab === "all" && !state.showHidden;
     const commit = () => {
-      setMark(key, { state: nextState, seen: true });
+      const extra = nextState === "applied" ? { applied_at: new Date().toISOString() } : prev === "applied" ? { applied_at: undefined } : {};
+      setMark(key, { state: nextState, seen: true, ...extra });
       refreshDetail();
       if (nextState === "saved") { const b = $(`.swipe[data-key="${CSS.escape(key)}"] .save-fab`); if (b) b.classList.add("pop"); }
     };
@@ -784,7 +759,8 @@
     else commit();
     if (nextState === "hidden") toast("Hidden from your list", () => { setMark(key, { state: prev }); refreshDetail(); });
     else if (nextState === "saved") toast("Saved");
-    else if (nextState === "applied") toast("Marked as applied. Good luck!");
+    else if (nextState === "applied") toast("Marked as applied. Good luck!", () => { setMark(key, { state: prev, applied_at: undefined }); refreshDetail(); });
+    else if (prev === "applied") toast("No longer marked as applied");
     else if (prev === "saved") toast("Removed from saved");
   }
 
@@ -920,10 +896,8 @@
 
   document.addEventListener("click", (e) => {
     if (suppressClick && e.target.closest("#job-list")) { e.preventDefault(); e.stopPropagation(); return; }
-    const ap = e.target.closest("[data-apply]");
-    if (ap) { askApply(ap.dataset.apply); return; }
-    const apc = e.target.closest("[data-apply-cancel]");
-    if (apc) { cancelApply(apc.dataset.applyCancel); return; }
+    const doc = e.target.closest("[data-doc]");
+    if (doc) { openDoc(doc.dataset.doc, Number(doc.dataset.docI)); return; }
     const act = e.target.closest("[data-act]");
     if (act) { toggleState(act.dataset.key, act.dataset.act); return; }
     const open = e.target.closest("[data-open]");
@@ -943,8 +917,6 @@
   }, true);
 
   document.addEventListener("change", (e) => {
-    const sa = e.target.closest("[data-self-applied]");
-    if (sa) { if ((mark(sa.dataset.selfApplied).state === "applied") !== sa.checked) toggleState(sa.dataset.selfApplied, "applied"); return; }
     if (e.target.name === "sort" && e.target.closest("#sort-pills")) { state.sort = e.target.value; savePrefs(); render(); }
   });
 
@@ -954,8 +926,6 @@
   $("#filter-btn").addEventListener("click", () => openSheet($("#filters")));
   $("#filters-done").addEventListener("click", () => closeSheet($("#filters")));
   $("#filters-clear").addEventListener("click", () => { const keep = state.filters.has("match"); state.filters = new Set(keep ? ["match"] : []); state.sort = "score"; savePrefs(); render(); });
-  $("#confirm-no").addEventListener("click", () => closeSheet($("#confirm")));
-  $("#confirm-yes").addEventListener("click", () => { const k = state.confirmKey; closeSheet($("#confirm")); if (k) requestApply(k); });
   $("#criteria-form").addEventListener("submit", saveCriteria);
   $("#github-form").addEventListener("submit", saveGithub);
   $("#github-link").addEventListener("click", async () => {
@@ -987,7 +957,7 @@
   }
 
   // Exposed for tests.
-  window.__jf = { parsePay, schoolHours, parseTimeRanges, state, mergeMarks, mergeApply };
+  window.__jf = { parsePay, schoolHours, parseTimeRanges, state, mergeMarks };
 
   consumeKeyLink();
   if (gh.configured()) { try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch { /* unsupported */ } }
