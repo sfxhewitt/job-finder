@@ -17,6 +17,7 @@
     min_hourly_pay: MIN_WAGE, keywords: [], notes: "",
   };
 
+  let docDirs = null;  // cached list of documents/applications folders
   const state = {
     mode: "server",          // "server" | "github" | "static"
     jobs: [],
@@ -134,6 +135,7 @@
       gh.read(GH_PATHS.jobs, null), gh.read(GH_PATHS.marks, {}), gh.read(GH_PATHS.criteria, {}),
     ]);
     state.docs = await gh.read(GH_PATHS.docs, {}).catch(() => ({}));
+    docDirs = null;
     state.mode = "github";
     if (jobs) applyJobs({ jobs: toJobList(jobs), source: `${gh.cfg().repo}/${GH_PATHS.jobs}`, sample: false });
     else applyJobs({ jobs: [], source: "", sample: false });
@@ -427,6 +429,7 @@
   function chips(j, { full = false } = {}) {
     const t = [];
     const am = mark(j.key);
+    if (am.state === "saved" && !full && state.mode === "github") t.push(docsReady(j.key) ? `<span class="chip hl">${ICON.doc}Documents ready</span>` : `<span class="chip">${ICON.doc}Preparing documents</span>`);
     if (am.state === "applied" && !full) t.push(`<span class="chip brand">${ICON.check}Applied${am.applied_at ? ` ${esc(fmtDate(String(am.applied_at).slice(0, 10)))}` : ""}</span>`);
     if (j.location && !full) t.push(`<span class="chip">${ICON.pin}${esc(j.location)}</span>`);
     if (j._school) t.push(`<span class="chip hl">${ICON.sun}School hours</span>`);
@@ -686,7 +689,6 @@
   // looking for a documents/applications/<company>_... folder in the private repo.
   const slug = (s) => String(s || "").toLowerCase().replace(/&/g, "and").replace(/\(.*?\)/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   const docLabel = (name) => /cover/i.test(name) ? "Cover letter" : /cv|_cv_|^cv|cv_draft|resume/i.test(name) ? "CV" : name.replace(/\.[a-z]+$/i, "").replace(/[_-]+/g, " ");
-  let docDirs = null;
   async function findDocs(j) {
     if (Array.isArray(state.docs[j.key])) return state.docs[j.key];
     if (state.mode !== "github") return [];
@@ -704,9 +706,16 @@
       return (state.docs[j.key] = (pdfs.length ? pdfs : files).map((f) => ({ label: docLabel(f.name), path: f.path })));
     } catch { return []; }
   }
+  const docsReady = (k) => Array.isArray(state.docs[k]) && state.docs[k].length > 0;
   function docsHtml(j) {
     const list = state.docs[j.key];
-    if (!Array.isArray(list) || !list.length) return "";
+    if (!Array.isArray(list) || !list.length) {
+      // Saving a job asks for a tailored CV and cover letter; they are drafted on the next run.
+      if (state.mode === "github" && mark(j.key).state === "saved" && Array.isArray(list)) {
+        return `<div class="apply-card pending"><span class="ac-icon">${ICON.doc}</span><div><b>Preparing your documents</b><span>A CV and cover letter for this job usually appear within 30 minutes.</span></div></div>`;
+      }
+      return "";
+    }
     return `<div class="section"><h3>Your documents</h3><div class="doc-list">${list.map((d, i) =>
       `<button class="btn btn-ghost btn-block doc-btn" data-doc="${esc(j.key)}" data-doc-i="${i}">${ICON.doc}<span>${esc(d.label || d.path.split("/").pop())}</span></button>`).join("")}</div></div>`;
   }
@@ -730,6 +739,10 @@
     const j = state.jobs.find((x) => x.key === state.openKey);
     if (!j) return;
     $("#apply-box").innerHTML = applyStatusHtml(j);
+    if ($("#docs-box")) {
+      if (!Array.isArray(state.docs[j.key])) findDocs(j).then(() => { if (state.openKey === j.key && $("#docs-box")) $("#docs-box").innerHTML = docsHtml(j); });
+      else $("#docs-box").innerHTML = docsHtml(j);
+    }
     renderDetailBar(j);
   }
 

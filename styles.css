@@ -439,3 +439,5 @@ main { max-width: 680px; margin: 0 auto; }
 .doc-btn svg { color: var(--brand); flex: none; }
 .icon-pill.status { padding: 0 12px; }
 #detail-bar .btn-soft[aria-pressed="true"] { background: var(--good-soft); color: var(--good); }
+.apply-card.pending { background: var(--brand-soft); }
+.apply-card.pending .ac-icon { background: var(--brand); }
