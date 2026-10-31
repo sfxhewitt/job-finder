@@ -7,9 +7,11 @@
   "use strict";
 
   const MIN_WAGE = 12.71; // UK National Living Wage (21+) from April 2026
-  const LS = { marks: "jf.marks", criteria: "jf.criteria", prefs: "jf.prefs", token: "jf.token", gh: "jf.github" };
+  const LS = { marks: "jf.marks", criteria: "jf.criteria", prefs: "jf.prefs", token: "jf.token", gh: "jf.github", pushAsked: "jf.pushAsked" };
   const GH_DEFAULTS = { owner: "sfxhewitt", repo: "job-searcher", branch: "main", token: "" };
-  const GH_PATHS = { jobs: "web/data/jobs.json", marks: "web/data/marks.json", criteria: "search_criteria.json", docs: "web/data/documents.json", docsDir: "documents/applications" };
+  // Public half of the push-alert key pair (safe to publish); web/data/push_config.json overrides it.
+  const VAPID_PUBLIC_KEY = "BO-R6-cReseLgpsr98DUHB-BoIhZTI_dnCTbTM6zxqkI9UcjEcGgReiRPWqEI24JK8p42ASAIDsgs0wFps3qazs";
+  const GH_PATHS = { jobs: "web/data/jobs.json", marks: "web/data/marks.json", criteria: "search_criteria.json", docs: "web/data/documents.json", pushConfig: "web/data/push_config.json", pushSubs: "web/data/push_subscriptions.json", docsDir: "documents/applications" };
   const DEFAULT_CRITERIA = {
     // Generic defaults: the real criteria come from search_criteria.json in the private repo.
     candidate: "", locations: [], remote_ok: true, hours: "any", school_hours: false,
@@ -23,7 +25,8 @@
     jobs: [],
     source: "",
     sample: false,
-    docs: {},                // job key -> [{ label, path }] prepared CVs / cover letters
+    docs: {},
+    pushKey: "",             // VAPID public key from web/data/push_config.json (empty = alerts not set up yet)                // job key -> [{ label, path }] prepared CVs / cover letters
     marks: {},               // key -> { state: "saved"|"applied"|"hidden"|undefined, seen: bool, note: string, updated: iso }
     criteria: { ...DEFAULT_CRITERIA },
     tab: "all",
@@ -135,6 +138,7 @@
       gh.read(GH_PATHS.jobs, null), gh.read(GH_PATHS.marks, {}), gh.read(GH_PATHS.criteria, {}),
     ]);
     state.docs = await gh.read(GH_PATHS.docs, {}).catch(() => ({}));
+    state.pushKey = await gh.read(GH_PATHS.pushConfig, {}).then((c) => (c && c.vapid_public_key) || VAPID_PUBLIC_KEY).catch(() => VAPID_PUBLIC_KEY);
     docDirs = null;
     state.mode = "github";
     if (jobs) applyJobs({ jobs: toJobList(jobs), source: `${gh.cfg().repo}/${GH_PATHS.jobs}`, sample: false });
@@ -177,6 +181,7 @@
     updateBanner(banner);
     fillCriteriaForm();
     fillGithubForm();
+    renderPushRow();
     render();
   }
 
@@ -712,7 +717,7 @@
     if (!Array.isArray(list) || !list.length) {
       // Saving a job asks for a tailored CV and cover letter; they are drafted on the next run.
       if (state.mode === "github" && mark(j.key).state === "saved" && Array.isArray(list)) {
-        return `<div class="apply-card pending"><span class="ac-icon">${ICON.doc}</span><div><b>Preparing your documents</b><span>A CV and cover letter for this job usually appear within an hour (7am to 10pm).</span></div></div>`;
+        return `<div class="apply-card pending"><span class="ac-icon">${ICON.doc}</span><div><b>Preparing your documents</b><span>A CV and cover letter for this job usually appear within a few minutes.</span></div></div>`;
       }
       return "";
     }
@@ -771,7 +776,7 @@
     if (leaving && !matchMedia("(prefers-reduced-motion: reduce)").matches) { li.classList.add("leaving"); setTimeout(commit, 280); }
     else commit();
     if (nextState === "hidden") toast("Hidden from your list", () => { setMark(key, { state: prev }); refreshDetail(); });
-    else if (nextState === "saved") toast("Saved");
+    else if (nextState === "saved") { toast(state.mode === "github" && !docsReady(key) ? "Saved. Preparing your documents." : "Saved"); maybeOfferPush(); }
     else if (nextState === "applied") toast("Marked as applied. Good luck!", () => { setMark(key, { state: prev, applied_at: undefined }); refreshDetail(); });
     else if (prev === "applied") toast("No longer marked as applied");
     else if (prev === "saved") toast("Removed from saved");
@@ -890,14 +895,82 @@
     return `${location.origin}${location.pathname}#repo=${encodeURIComponent(c.owner + "/" + c.repo)}&key=${encodeURIComponent(c.token)}`;
   }
   let toastTimer = null;
-  function toast(msg, undo) {
+  function toast(msg, undo, label = "Undo") {
     const t = $("#toast");
+    // An open sheet makes the rest of the page untappable, so show the toast inside it.
+    const host = document.querySelector("dialog[open]") || document.body;
+    if (t.parentNode !== host) host.appendChild(t);
     t.hidden = true; void t.offsetWidth; // restart the entry animation
-    t.innerHTML = `<span>${esc(msg)}</span>${undo ? "<button type=\"button\">Undo</button>" : ""}`;
+    t.innerHTML = `<span>${esc(msg)}</span>${undo ? `<button type="button">${esc(label)}</button>` : ""}`;
     t.hidden = false;
     if (undo) t.querySelector("button").onclick = () => { undo(); t.hidden = true; };
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (t.hidden = true), undo ? 5000 : 2200);
+    toastTimer = setTimeout(() => (t.hidden = true), undo ? (label === "Undo" ? 5000 : 8000) : 2200);
+  }
+
+  // ---------- push alerts ("your documents are ready") ----------
+  // Works in Chrome/Android and in the iPhone app once it's added to the Home Screen (iOS 16.4+).
+  const push = {
+    supported: () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window,
+    isIos: () => /iphone|ipad|ipod/i.test(navigator.userAgent),
+    standalone: () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true,
+    async current() {
+      if (!this.supported()) return null;
+      const reg = await navigator.serviceWorker.getRegistration();
+      return reg ? reg.pushManager.getSubscription() : null;
+    },
+    keyBytes(b64) {
+      const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+      const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+      return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+    },
+    async saveSubs(fn, message) {
+      // fn transforms the stored list; re-applied to the latest copy if another device wrote meanwhile.
+      const remote = await gh.read(GH_PATHS.pushSubs, []).catch(() => []);
+      const list = fn(Array.isArray(remote) ? remote : []);
+      await gh.write(GH_PATHS.pushSubs, list, message, (r) => fn(Array.isArray(r) ? r : []));
+    },
+    async enable() {
+      if (!state.pushKey || state.mode !== "github") { toast("Alerts aren't set up yet."); return false; }
+      if (!this.supported()) {
+        toast(this.isIos() && !this.standalone() ? "On iPhone, add Job Finder to your Home Screen and open it from there to get alerts." : "This browser can't show alerts.");
+        return false;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { toast("Alerts are off. You can allow them in your phone's settings."); return false; }
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: this.keyBytes(state.pushKey) });
+      const json = sub.toJSON();
+      await this.saveSubs((list) => [...list.filter((x) => x && x.endpoint !== json.endpoint), json], "Turn on Job Finder alerts");
+      ls.set(LS.pushAsked, true);
+      toast("Alerts on. We'll tell you when documents are ready.");
+      return true;
+    },
+    async disable() {
+      const sub = await this.current();
+      if (sub) {
+        const endpoint = sub.endpoint;
+        await sub.unsubscribe().catch(() => {});
+        if (state.mode === "github") await this.saveSubs((list) => list.filter((x) => x && x.endpoint !== endpoint), "Turn off Job Finder alerts");
+      }
+      toast("Alerts off");
+    },
+  };
+  async function renderPushRow() {
+    const row = $("#push-row");
+    if (!row) return;
+    row.hidden = !(state.mode === "github" && state.pushKey);
+    if (row.hidden) return;
+    const sub = await push.current().catch(() => null);
+    $("#push-toggle").checked = !!sub && Notification.permission === "granted";
+  }
+  // After the first bookmark, offer alerts once (the tap on "Turn on" lets the phone ask for permission).
+  function maybeOfferPush() {
+    if (ls.get(LS.pushAsked, false) || !state.pushKey || state.mode !== "github") return;
+    if (push.supported() && Notification.permission === "denied") return;
+    ls.set(LS.pushAsked, true);
+    setTimeout(() => toast("Want a notification when the CV and cover letter are ready?", () => push.enable().then(renderPushRow).catch(() => toast("Couldn't turn on alerts. Try again in Settings.")), "Turn on"), 2400);
   }
 
   // ---------- events ----------
@@ -941,6 +1014,14 @@
   $("#filters-clear").addEventListener("click", () => { const keep = state.filters.has("match"); state.filters = new Set(keep ? ["match"] : []); state.sort = "score"; savePrefs(); render(); });
   $("#criteria-form").addEventListener("submit", saveCriteria);
   $("#github-form").addEventListener("submit", saveGithub);
+  $("#push-toggle").addEventListener("change", async (e) => {
+    const on = e.target.checked;
+    e.target.disabled = true;
+    try { if (on) await push.enable(); else await push.disable(); }
+    catch { toast("Couldn't change alerts. Try again."); }
+    e.target.disabled = false;
+    renderPushRow();
+  });
   $("#github-link").addEventListener("click", async () => {
     const link = keyLink();
     try { await navigator.clipboard.writeText(link); toast("Sign-in link copied. Keep it private."); }
@@ -976,5 +1057,13 @@
   if (gh.configured()) { try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch { /* unsupported */ } }
   state.loading = true;
   render();
-  loadAll().finally(() => { state.loading = false; render(); });
+  loadAll().finally(() => {
+    state.loading = false; render();
+    // Deep link from a notification: ?job=<key> opens that job's details.
+    const q = new URLSearchParams(location.search).get("job");
+    if (q) { history.replaceState(null, "", location.pathname + location.hash); if (state.jobs.some((j) => j.key === q)) openDetail(q); }
+  });
+  if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", (e) => {
+    if (e.data && e.data.type === "open-job" && state.jobs.some((j) => j.key === e.data.key)) loadAll().then(() => openDetail(e.data.key));
+  });
 })();

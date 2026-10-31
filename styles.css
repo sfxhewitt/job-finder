@@ -441,3 +441,6 @@ main { max-width: 680px; margin: 0 auto; }
 #detail-bar .btn-soft[aria-pressed="true"] { background: var(--good-soft); color: var(--good); }
 .apply-card.pending { background: var(--brand-soft); }
 .apply-card.pending .ac-icon { background: var(--brand); }
+.toast { width: max-content; max-width: min(calc(100% - 32px), 400px); }
+.toast span { flex: 1; }
+.toast button { white-space: nowrap; }
