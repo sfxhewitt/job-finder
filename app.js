@@ -495,13 +495,22 @@
     return `<div class="em-icon">${EMPTY_ICON[icon]}</div><strong>${title}</strong>${body}${btn}`;
   }
 
+  let heroScrolled = false;
+  function updateHero() {
+    const y = window.scrollY;
+    const room = document.documentElement.scrollHeight - window.innerHeight;
+    if (!heroScrolled && y > 140 && room > 300) heroScrolled = true;
+    else if (heroScrolled && (y < 8 || room < 120)) heroScrolled = false;
+    $("#hero").classList.toggle("compact", state.tab !== "all" || heroScrolled);
+  }
+
   function render() {
     const listView = state.tab !== "criteria";
     $("#view-jobs").hidden = !listView;
     $("#view-criteria").hidden = listView;
     $("#list-controls").hidden = !listView;
     $("#scope").hidden = state.tab !== "all";
-    $("#hero").classList.toggle("compact", state.tab !== "all");
+    updateHero();
     const name = (state.criteria.candidate || "").trim().split(/\s+/)[0];
     const hr = new Date().getHours();
     $("#greeting").textContent = `${hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening"}${name ? `, ${name}` : ""}`;
@@ -1037,11 +1046,13 @@
     if (ta) setMark(ta.dataset.note, { note: ta.value }, false);
   });
 
-  // Shrink the header once the list scrolls.
+  // Shrink the header once the list scrolls. Shrinking makes the page shorter, which can pull
+  // the scroll position back up; with a short list that used to flip the header back and forth.
+  // So: only shrink when there's plenty of room to scroll, and use separate on/off points.
   let ticking = false;
   window.addEventListener("scroll", () => {
     if (ticking) return; ticking = true;
-    requestAnimationFrame(() => { $("#hero").classList.toggle("compact", state.tab !== "all" || window.scrollY > 40); ticking = false; });
+    requestAnimationFrame(() => { updateHero(); ticking = false; });
   }, { passive: true });
 
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && state.mode !== "static") loadAll(); });
