@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Jobs">
+  <title>Job Finder</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-row">
+      <h1 id="screen-title">Jobs</h1>
+      <button class="icon-btn" id="refresh-btn" aria-label="Refresh jobs" title="Refresh">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <div id="list-controls">
+      <label class="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <input id="search" type="search" placeholder="Search title, shop, place" autocomplete="off" enterkeyhint="search">
+      </label>
+      <div class="chips" id="filter-chips" role="group" aria-label="Filters">
+        <button class="chip" data-filter="match" aria-pressed="true">Matches criteria</button>
+        <button class="chip" data-filter="school" aria-pressed="false">School hours</button>
+        <button class="chip" data-filter="local" aria-pressed="false">Local</button>
+        <button class="chip" data-filter="remote" aria-pressed="false">Remote</button>
+        <button class="chip" data-filter="high" aria-pressed="false">Top fit</button>
+        <button class="chip" data-filter="new" aria-pressed="false">Unseen</button>
+      </div>
+      <div class="sortbar">
+        <span id="result-count" aria-live="polite"></span>
+        <label class="sort">Sort
+          <select id="sort">
+            <option value="score">Best match</option>
+            <option value="newest">Newest</option>
+            <option value="deadline">Closing soon</option>
+            <option value="pay">Highest pay</option>
+          </select>
+        </label>
+      </div>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <main id="main">
+    <section id="view-jobs" class="view" aria-labelledby="screen-title">
+      <ul id="job-list" class="job-list"></ul>
+      <div id="empty" class="empty" hidden></div>
+    </section>
+
+    <section id="view-criteria" class="view" hidden>
+      <form id="criteria-form" class="form" autocomplete="off">
+        <p class="help">These settings shape the next search and the "Matches criteria" filter here.</p>
+        <label class="field">Searching for
+          <input name="candidate" type="text" placeholder="Name">
+        </label>
+        <label class="field">Locations <span class="hint">comma separated</span>
+          <input name="locations" type="text" placeholder="e.g. Manchester, Salford">
+        </label>
+        <label class="switch"><input name="remote_ok" type="checkbox"><span>Remote jobs are OK</span></label>
+        <label class="field">Hours
+          <select name="hours">
+            <option value="part-time">Part-time</option>
+            <option value="full-time">Full-time</option>
+            <option value="any">Any</option>
+          </select>
+        </label>
+        <label class="switch"><input name="school_hours" type="checkbox"><span>Prefer school hours</span></label>
+        <label class="field">Job types wanted <span class="hint">comma separated</span>
+          <input name="sectors_include" type="text" placeholder="retail">
+        </label>
+        <label class="field">Never show <span class="hint">comma separated</span>
+          <input name="sectors_exclude" type="text" placeholder="e.g. warehouse, nights">
+        </label>
+        <label class="field">Minimum pay (£ per hour)
+          <input name="min_hourly_pay" type="number" inputmode="decimal" step="0.01" min="0">
+        </label>
+        <label class="field">Search terms <span class="hint">comma separated</span>
+          <input name="keywords" type="text" placeholder="sales assistant, shop assistant">
+        </label>
+        <label class="field">Notes for the search
+          <textarea name="notes" rows="3"></textarea>
+        </label>
+        <button type="submit" class="primary">Save criteria</button>
+        <p id="criteria-status" class="help" aria-live="polite"></p>
+      </form>
+
+      <form id="github-form" class="form" autocomplete="off">
+        <h2 class="section-title">Connect to GitHub</h2>
+        <p class="help">The job list, saved jobs and criteria are kept in your private GitHub repo. Paste an access key once and this phone remembers it. Nobody without the key can see the list.</p>
+        <label class="field">Repository
+          <input name="repo" type="text" placeholder="owner/repo" autocapitalize="off" spellcheck="false">
+        </label>
+        <label class="field">Access key
+          <input name="token" type="password" placeholder="github_pat_…" autocapitalize="off" spellcheck="false">
+        </label>
+        <button type="submit" class="primary">Connect</button>
+        <button type="button" class="link-btn" id="github-disconnect" hidden>Disconnect and forget the key</button>
+        <p id="github-status" class="help" aria-live="polite"></p>
+        <details class="help">
+          <summary>How to get an access key</summary>
+          <ol>
+            <li>On GitHub open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Settings → Developer settings → Fine-grained tokens → Generate new token</a>.</li>
+            <li>Repository access: <em>Only select repositories</em> → your job-searcher repo.</li>
+            <li>Permissions → Repository → <em>Contents: Read and write</em>. Nothing else.</li>
+            <li>Generate, copy it, and paste it above.</li>
+          </ol>
+        </details>
+      </form>
+    </section>
+  </main>
+
+  <dialog id="detail" class="sheet" aria-labelledby="detail-title">
+    <div class="sheet-inner">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <button class="icon-btn sheet-close" id="detail-close" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <div id="detail-body"></div>
+    </div>
+  </dialog>
+
+  <nav class="tabbar" aria-label="Sections">
+    <button class="tab" data-tab="all" aria-current="page">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+      <span>Jobs</span>
+    </button>
+    <button class="tab" data-tab="saved">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      <span>Saved</span><b class="badge" id="saved-count" hidden></b>
+    </button>
+    <button class="tab" data-tab="applied">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l5 5L20 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Applied</span>
+    </button>
+    <button class="tab" data-tab="criteria">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="10" cy="12" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="18" r="2" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+      <span>Criteria</span>
+    </button>
+  </nav>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
