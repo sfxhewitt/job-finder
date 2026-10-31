@@ -1,5 +1,5 @@
 // Offline shell: the app loads without a connection; job data is always fetched fresh when online.
-const CACHE = "jobfinder-v7";
+const CACHE = "jobfinder-v8";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "manifest.webmanifest", "icon.svg"];
 
 self.addEventListener("install", (e) => {

@@ -712,7 +712,7 @@
     if (!Array.isArray(list) || !list.length) {
       // Saving a job asks for a tailored CV and cover letter; they are drafted on the next run.
       if (state.mode === "github" && mark(j.key).state === "saved" && Array.isArray(list)) {
-        return `<div class="apply-card pending"><span class="ac-icon">${ICON.doc}</span><div><b>Preparing your documents</b><span>A CV and cover letter for this job usually appear within 30 minutes.</span></div></div>`;
+        return `<div class="apply-card pending"><span class="ac-icon">${ICON.doc}</span><div><b>Preparing your documents</b><span>A CV and cover letter for this job usually appear within an hour (7am to 10pm).</span></div></div>`;
       }
       return "";
     }
