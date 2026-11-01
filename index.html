@@ -72,9 +72,16 @@
               <label><input type="radio" name="hours" value="any"><span>Any</span></label>
             </div>
           </div>
+          <div class="row"><span>Contract</span>
+            <div class="pills" role="radiogroup" aria-label="Contract">
+              <label><input type="radio" name="contract" value="permanent"><span>Permanent</span></label>
+              <label><input type="radio" name="contract" value="any"><span>Any</span></label>
+            </div>
+          </div>
           <label class="row switch"><span>Prefer school hours</span><input name="school_hours" type="checkbox"></label>
           <label class="row"><span>Lowest pay</span><span class="money"><i>£</i><input name="min_hourly_pay" type="number" inputmode="decimal" step="0.01" min="0"><i>/hr</i></span></label>
         </div>
+        <p class="hint">Hours and Contract save as soon as you tap them. "Permanent" leaves out temporary, seasonal, Christmas and fixed-term jobs.</p>
 
         <h2 class="group-title">Kinds of job</h2>
         <div class="group">

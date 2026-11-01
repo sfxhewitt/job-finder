@@ -14,7 +14,7 @@
   const GH_PATHS = { jobs: "web/data/jobs.json", marks: "web/data/marks.json", criteria: "search_criteria.json", docs: "web/data/documents.json", pushConfig: "web/data/push_config.json", pushSubs: "web/data/push_subscriptions.json", docsDir: "documents/applications" };
   const DEFAULT_CRITERIA = {
     // Generic defaults: the real criteria come from search_criteria.json in the private repo.
-    candidate: "", locations: [], remote_ok: true, hours: "any", school_hours: false,
+    candidate: "", locations: [], remote_ok: true, hours: "part-time", contract: "permanent", school_hours: false,
     sectors_include: [], sectors_exclude: [],
     min_hourly_pay: MIN_WAGE, keywords: [], notes: "",
   };
@@ -298,6 +298,13 @@
   const isRemote = (j) => /\b(remote|work from home|home[- ]based|wfh|hybrid)\b/i.test(`${j.location || ""} ${j.title || ""}`);
   const isFullTime = (j) => /\bfull[- ]time\b/i.test(`${j.title || ""} ${j.hours || ""}`) && !/\bpart[- ]time\b/i.test(`${j.title || ""} ${j.hours || ""}`);
 
+  // Temporary / seasonal / fixed-term postings (dropped when the contract switch is "permanent").
+  const isTemp = (j) => {
+    const head = `${j.title || ""} ${j.hours || ""} ${j.contract || ""} ${j.job_type || ""}`;
+    return /\b(temporary|temp|seasonal|christmas|xmas|festive|fixed[- ]term|peak)\b/i.test(head)
+      || /\b(temporary|fixed[- ]term|seasonal) (contract|role|position|post)\b/i.test(j.description || "");
+  };
+
   function enrich(j) {
     const pay = parsePay(j);
     return {
@@ -305,6 +312,7 @@
       _school: schoolHours(j),
       _remote: isRemote(j),
       _fullTime: isFullTime(j),
+      _temp: isTemp(j),
       _pay: pay,
       _hourly: pay && pay.hourly,
       _haystack: [j.title, j.company, j.location, j.description, j.hours, j.salary].filter(Boolean).join(" ").toLowerCase(),
@@ -328,6 +336,8 @@
     const placeOk = isLocal(j) || (c.remote_ok && j._remote) || !(c.locations || []).length;
     if (!placeOk) return false;
     if (c.hours === "part-time" && j._fullTime) return false;
+    if (c.hours === "full-time" && /\bpart[- ]time\b/i.test(`${j.title || ""} ${j.hours || ""}`)) return false;
+    if (c.contract === "permanent" && j._temp) return false;
     if (c.min_hourly_pay && j._hourly != null && j._hourly + 0.005 < Number(c.min_hourly_pay)) return false;
     return true;
   }
@@ -809,6 +819,20 @@
       else el.value = Array.isArray(c[el.name]) ? c[el.name].join(", ") : (c[el.name] ?? "");
     }
   }
+  // The Hours and Contract switches save straight away, changing only their own key in the file.
+  async function saveCriteriaKey(key, value) {
+    state.criteria = normaliseCriteria({ ...state.criteria, [key]: value });
+    render();
+    const status = $("#criteria-status");
+    if (state.mode !== "github") { ls.set(LS.criteria, state.criteria); if (state.mode === "server") await api("api/criteria", { method: "PUT", body: JSON.stringify(state.criteria) }).catch(() => {}); toast("Saved"); return; }
+    try {
+      const remote = await gh.read(GH_PATHS.criteria, {});
+      await gh.write(GH_PATHS.criteria, { ...(remote || {}), [key]: value }, `Search criteria: ${key} = ${value} (Job Finder)`, (r) => ({ ...(r || {}), [key]: value }));
+      toast("Saved. The next search will use this.");
+      status.textContent = "";
+    } catch { toast("Couldn't save to GitHub. Try again."); }
+  }
+
   async function saveCriteria(e) {
     e.preventDefault();
     const f = e.target; const data = {};
@@ -817,14 +841,14 @@
       if (el.type === "radio") { if (el.checked) data[el.name] = el.value; continue; }
       data[el.name] = el.type === "checkbox" ? el.checked : el.value;
     }
-    state.criteria = normaliseCriteria(data);
+    state.criteria = normaliseCriteria({ ...state.criteria, ...data });
     const status = $("#criteria-status");
     if (state.mode === "static") {
       ls.set(LS.criteria, state.criteria);
       status.textContent = "Saved on this phone only. Connect your job list below so the search can use it.";
     } else if (state.mode === "github") {
       try {
-        await gh.write(GH_PATHS.criteria, state.criteria, "Update search criteria from Job Finder");
+        await gh.write(GH_PATHS.criteria, state.criteria, "Update search criteria from Job Finder", (remote) => ({ ...(remote || {}), ...state.criteria }));
         status.textContent = "Saved. The next search will use these settings.";
       } catch {
         ls.set(LS.criteria, state.criteria);
@@ -1013,6 +1037,7 @@
 
   document.addEventListener("change", (e) => {
     if (e.target.name === "sort" && e.target.closest("#sort-pills")) { state.sort = e.target.value; savePrefs(); render(); }
+    if ((e.target.name === "hours" || e.target.name === "contract") && e.target.closest("#criteria-form") && e.target.checked) saveCriteriaKey(e.target.name, e.target.value);
   });
 
   let qTimer = null;
