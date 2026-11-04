@@ -11,7 +11,7 @@
   const GH_DEFAULTS = { owner: "sfxhewitt", repo: "job-searcher", branch: "main", token: "" };
   // Public half of the push-alert key pair (safe to publish); web/data/push_config.json overrides it.
   const VAPID_PUBLIC_KEY = "BO-R6-cReseLgpsr98DUHB-BoIhZTI_dnCTbTM6zxqkI9UcjEcGgReiRPWqEI24JK8p42ASAIDsgs0wFps3qazs";
-  const GH_PATHS = { jobs: "web/data/jobs.json", marks: "web/data/marks.json", criteria: "search_criteria.json", docs: "web/data/documents.json", pushConfig: "web/data/push_config.json", pushSubs: "web/data/push_subscriptions.json", docsDir: "documents/applications" };
+  const GH_PATHS = { jobs: "web/data/jobs.json", marks: "web/data/marks.json", criteria: "search_criteria.json", docs: "web/data/documents.json", applyStatus: "web/data/apply_status.json", pushConfig: "web/data/push_config.json", pushSubs: "web/data/push_subscriptions.json", docsDir: "documents/applications" };
   const DEFAULT_CRITERIA = {
     // Generic defaults: the real criteria come from search_criteria.json in the private repo.
     candidate: "", locations: [], remote_ok: true, hours: "part-time", contract: "permanent", school_hours: false,
@@ -26,6 +26,7 @@
     source: "",
     sample: false,
     docs: {},
+    applyStatus: {},         // job key -> { status, note, updated } written by the apply run
     pushKey: "",             // VAPID public key from web/data/push_config.json (empty = alerts not set up yet)                // job key -> [{ label, path }] prepared CVs / cover letters
     marks: {},               // key -> { state: "saved"|"applied"|"hidden"|undefined, seen: bool, note: string, updated: iso }
     criteria: { ...DEFAULT_CRITERIA },
@@ -138,6 +139,7 @@
       gh.read(GH_PATHS.jobs, null), gh.read(GH_PATHS.marks, {}), gh.read(GH_PATHS.criteria, {}),
     ]);
     state.docs = await gh.read(GH_PATHS.docs, {}).catch(() => ({}));
+    state.applyStatus = await gh.read(GH_PATHS.applyStatus, {}).then((x) => (x && typeof x === "object" && !Array.isArray(x) ? x : {})).catch(() => ({}));
     state.pushKey = await gh.read(GH_PATHS.pushConfig, {}).then((c) => (c && c.vapid_public_key) || VAPID_PUBLIC_KEY).catch(() => VAPID_PUBLIC_KEY);
     docDirs = null;
     state.mode = "github";
@@ -445,6 +447,9 @@
     const t = [];
     const am = mark(j.key);
     if (am.state === "saved" && !full && state.mode === "github") t.push(docsReady(j.key) ? `<span class="chip hl">${ICON.doc}Documents ready</span>` : `<span class="chip">${ICON.doc}Preparing documents</span>`);
+    const ap = applyInfo(j.key);
+    if (ap && !full) t.push(`<span class="chip ${ap.cls}">${ICON.send}${esc(ap.short)}</span>`);
+    else if (j.auto_apply && !full) t.push(j.auto_apply.qualifies ? `<span class="chip good">${ICON.spark}Auto-apply eligible</span>` : `<span class="chip">Manual</span>`);
     if (am.state === "applied" && !full) t.push(`<span class="chip brand">${ICON.check}Applied${am.applied_at ? ` ${esc(fmtDate(String(am.applied_at).slice(0, 10)))}` : ""}</span>`);
     if (j.location && !full) t.push(`<span class="chip">${ICON.pin}${esc(j.location)}</span>`);
     if (j._school) t.push(`<span class="chip hl">${ICON.sun}School hours</span>`);
@@ -681,6 +686,7 @@
       <div id="apply-box">${applyStatusHtml(j)}</div>
       ${url ? `<a class="btn btn-ghost btn-block open-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${ICON.ext} Open the job advert</a>` : ""}
       <div id="docs-box">${docsHtml(j)}</div>
+      <div id="autoapply-box">${applyForMeHtml(j)}</div>
       ${j.description ? `<div class="section"><h3>About the job</h3><p>${esc(j.description)}</p></div>` : ""}
       ${bl(j.strengths) ? `<div class="section"><h3>Why it fits</h3>${bl(j.strengths)}</div>` : ""}
       ${bl(j.gaps) ? `<div class="section"><h3>Worth checking</h3>${bl(j.gaps, "warn")}</div>` : ""}
@@ -706,6 +712,52 @@
     if (m.state !== "applied") return "";
     const when = m.applied_at ? `On ${fmtDate(String(m.applied_at).slice(0, 10))}` : "";
     return `<div class="apply-card"><span class="ac-icon">${ICON.check}</span><div><b>You've applied</b><span>${esc(when || "Good luck!")}</span></div></div>`;
+  }
+
+  // ---------- apply for me (Claude applies after Daniel's tap) ----------
+  // A tap sets marks[key].apply_requested_at; the apply run reports back in web/data/apply_status.json.
+  const APPLY_STATUS = {
+    ready_manual: { short: "Apply by hand", title: "Ready to apply by hand", cls: "hl" },
+    awaiting_tap: { short: "Needs your OK", title: "Waiting for your OK", cls: "warn" },
+    submitted: { short: "Submitted by Claude", title: "Application submitted by Claude", cls: "good" },
+    blocked: { short: "Couldn't apply", title: "Claude couldn't apply", cls: "bad" },
+  };
+  function applyInfo(key) {
+    const m = mark(key);
+    const st = state.applyStatus[key];
+    const req = m.apply_requested_at ? String(m.apply_requested_at) : "";
+    if (req && (!st || !st.updated || new Date(req) > new Date(st.updated))) {
+      return { pending: true, short: "Apply requested", title: "Requested, waiting for Claude", note: "Claude picks requests up within the hour.", cls: "brand" };
+    }
+    if (st && APPLY_STATUS[st.status]) return { ...APPLY_STATUS[st.status], status: st.status, note: st.note || "", updated: st.updated };
+    if (st && st.status) return { short: st.status, title: st.status, note: st.note || "", cls: "", status: st.status };
+    return null;
+  }
+  function applyForMeHtml(j) {
+    if (state.mode !== "github") return "";
+    const a = j.auto_apply;
+    const ap = applyInfo(j.key);
+    const badge = a ? `<span class="chip ${a.qualifies ? "good" : ""}">${a.qualifies ? ICON.spark + "Auto-apply eligible" : "Manual"}</span>` : "";
+    const reasons = a && !a.qualifies && Array.isArray(a.reasons) && a.reasons.length
+      ? `<details class="why"><summary>Why manual?</summary><ul class="bullets warn">${a.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul></details>` : "";
+    const status = ap ? `<div class="apply-card ${ap.pending ? "pending" : ap.status === "blocked" ? "failed" : ""}"><span class="ac-icon">${ap.status === "blocked" ? ICON.x : ICON.send}</span><div><b>${esc(ap.title)}</b>${ap.note ? `<span>${esc(ap.note)}</span>` : ""}</div></div>` : "";
+    const btn = ap && (ap.pending || ap.status === "submitted") ? ""
+      : `<button type="button" class="btn btn-soft btn-block" data-apply-me="${esc(j.key)}">${ICON.send}${ap ? "Ask Claude to try again" : "Apply for me"}</button>`;
+    return `<div class="section"><h3>Applying</h3><div class="aa-head">${badge}</div>${reasons}${status}${btn}</div>`;
+  }
+  function askApply(key) {
+    const j = state.jobs.find((x) => x.key === key);
+    if (!j) return;
+    state.confirmKey = key;
+    const who = (state.criteria.candidate || "").trim().split(/\s+/)[0] || "the candidate";
+    $("#confirm-text").textContent = `Ask Claude to apply for ${who} to ${j.company || "this employer"}? (${j.title}.) Claude uses the prepared CV and letter, and sends it only where the employer's form allows. Otherwise it comes back ready to finish by hand.`;
+    openSheet($("#confirm"));
+  }
+  function requestApply(key) {
+    const prev = mark(key);
+    setMark(key, { state: prev.state === "applied" ? "applied" : "saved", seen: true, apply_requested_at: new Date().toISOString() });
+    refreshDetail();
+    toast("Requested. Claude will pick it up shortly.");
   }
 
   // ---------- prepared documents (CV, cover letter) ----------
@@ -763,6 +815,7 @@
     const j = state.jobs.find((x) => x.key === state.openKey);
     if (!j) return;
     $("#apply-box").innerHTML = applyStatusHtml(j);
+    if ($("#autoapply-box")) $("#autoapply-box").innerHTML = applyForMeHtml(j);
     if ($("#docs-box")) {
       if (!Array.isArray(state.docs[j.key])) findDocs(j).then(() => { if (state.openKey === j.key && $("#docs-box")) $("#docs-box").innerHTML = docsHtml(j); });
       else $("#docs-box").innerHTML = docsHtml(j);
@@ -1015,6 +1068,8 @@
 
   document.addEventListener("click", (e) => {
     if (suppressClick && e.target.closest("#job-list")) { e.preventDefault(); e.stopPropagation(); return; }
+    const am = e.target.closest("[data-apply-me]");
+    if (am) { askApply(am.dataset.applyMe); return; }
     const doc = e.target.closest("[data-doc]");
     if (doc) { openDoc(doc.dataset.doc, Number(doc.dataset.docI)); return; }
     const act = e.target.closest("[data-act]");
@@ -1048,6 +1103,8 @@
   $("#filters-clear").addEventListener("click", () => { const keep = state.filters.has("match"); state.filters = new Set(keep ? ["match"] : []); state.sort = "score"; savePrefs(); render(); });
   $("#criteria-form").addEventListener("submit", saveCriteria);
   $("#github-form").addEventListener("submit", saveGithub);
+  $("#confirm-no").addEventListener("click", () => closeSheet($("#confirm")));
+  $("#confirm-yes").addEventListener("click", () => { const k = state.confirmKey; state.confirmKey = null; closeSheet($("#confirm")); if (k) requestApply(k); });
   $("#push-toggle").addEventListener("change", async (e) => {
     const on = e.target.checked;
     e.target.disabled = true;

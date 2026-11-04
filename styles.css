@@ -444,3 +444,11 @@ main { max-width: 680px; margin: 0 auto; }
 .toast { width: max-content; max-width: min(calc(100% - 32px), 400px); }
 .toast span { flex: 1; }
 .toast button { white-space: nowrap; }
+
+/* Applying: auto-apply badge, reasons, apply-for-me */
+.aa-head { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.why { margin: 4px 0 10px; }
+.why summary { cursor: pointer; color: var(--brand); font-weight: 700; font-size: .92rem; padding: 6px 0; }
+.why .bullets { margin-top: 6px; }
+[data-apply-me] { margin-top: 12px; gap: 8px; }
+.chip.good { background: var(--good-soft); color: var(--good); }

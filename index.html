@@ -141,6 +141,21 @@
   </dialog>
 
   <!-- Filters -->
+  <dialog id="confirm" class="sheet sheet-small" aria-labelledby="confirm-title">
+    <div class="sheet-scroll">
+      <div class="grabber" aria-hidden="true"></div>
+      <div class="confirm-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <h2 id="confirm-title" class="sheet-title center">Apply for this job?</h2>
+      <p class="center muted" id="confirm-text"></p>
+    </div>
+    <div class="sheet-bar">
+      <button type="button" class="btn btn-ghost" id="confirm-no">Not now</button>
+      <button type="button" class="btn btn-accent grow" id="confirm-yes">Yes, apply for her</button>
+    </div>
+  </dialog>
+
   <dialog id="filters" class="sheet" aria-labelledby="filters-title">
     <div class="sheet-scroll">
       <div class="grabber" aria-hidden="true"></div>
