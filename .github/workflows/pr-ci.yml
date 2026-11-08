@@ -1,0 +1,44 @@
+name: PR CI
+
+# Real CI for the static Job Finder PWA: static validators + a Chromium browser smoke test.
+on:
+  pull_request:
+  # push to main only to bootstrap the workflow on the default branch.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          # Check out the actual PR head commit (falls back to the pushed commit on main).
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Static validators (positive)
+        run: node tests/validate.mjs
+
+      - name: Negative fixture assertions
+        run: node tests/negative.mjs
+
+      - name: Install Playwright (pinned) + Chromium
+        run: |
+          python3 --version
+          python3 -m venv /tmp/job-finder-ci-venv
+          /tmp/job-finder-ci-venv/bin/pip install playwright==1.56.0
+          /tmp/job-finder-ci-venv/bin/python -m playwright install --with-deps chromium
+
+      - name: Browser smoke test
+        run: /tmp/job-finder-ci-venv/bin/python tests/smoke.py
